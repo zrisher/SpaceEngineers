@@ -35,6 +35,21 @@ namespace Sandbox.Common.ObjectBuilders.Voxels
         }
         private string m_storageName;
 
+        /*
+        [ProtoMember]
+        public int ProceduralSeed;
+
+        [ProtoMember]
+        public float ProceduralSize;
+
+        [ProtoMember]
+        public string PrefabName;
+
+        // True if the VoxelMap hasn't changed since initial generation
+        [ProtoMember]
+        public bool Untouched;
+        */
+
         //[ProtoMember]
         public bool MutableStorage = true;
         public bool ShouldSerializeMutableStorage() { return !MutableStorage; }

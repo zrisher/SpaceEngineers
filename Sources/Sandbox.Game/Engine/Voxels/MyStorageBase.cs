@@ -105,6 +105,9 @@ namespace Sandbox.Engine.Voxels
             return result;
         }
 
+        /// <summary>
+        /// Loads a VoxelMap from a compressed bytestream
+        /// </summary>
         public static MyStorageBase Load(byte[] memoryBuffer)
         {
             MyStorageBase storage;
@@ -124,11 +127,15 @@ namespace Sandbox.Engine.Voxels
             return storage;
         }
 
+        /// <summary>
+        /// Loads a VoxelMap from a bytestream
+        /// </summary>
         private static void Load(Stream stream, out MyStorageBase storage, out bool isOldFormat)
         {
             ProfilerShort.Begin("MyStorageBase.Load");
             try
             {
+                MySandboxGame.Log.WriteLine("Loading voxel from byte steam");
                 isOldFormat = false;
                 string storageType = stream.ReadString();
                 int version = stream.Read7BitEncodedInt();
@@ -154,6 +161,9 @@ namespace Sandbox.Engine.Voxels
             }
         }
 
+        /// <summary>
+        /// Saves an VoxelMap's data to a file as a compressed bytestream
+        /// </summary>
         public void Save(out byte[] outCompressedData)
         {
             MyPrecalcComponent.AssertUpdateThread();
@@ -163,6 +173,7 @@ namespace Sandbox.Engine.Voxels
             {
                 if (m_compressedData == null)
                 {
+                    MySandboxGame.Log.WriteLine("Writing voxel to byte stream");
                     MemoryStream ms;
                     using (ms = new MemoryStream(0x4000))
                     using (GZipStream gz = new GZipStream(ms, CompressionMode.Compress))

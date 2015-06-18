@@ -65,10 +65,14 @@ namespace Sandbox.Game.Entities
             voxelMap.Init(storageName, storage as Sandbox.Engine.Voxels.IMyStorage, position);
             MyEntities.Add(voxelMap);
             return voxelMap;
+            //return MyWorldGenerator.AddVoxelMap(storageName, storage as MyStorageBase, position, voxelMapId);
         }
 
         IMyVoxelMap IMyVoxelMaps.CreateVoxelMapFromStorageName(string storageName, string prefabVoxelMapName, Vector3D position)
         {
+            MySandboxGame.Log.WriteLine(string.Format("ZZZ - CreateVoxelMapFromStorageName: storageName = '{0}', prefabVoxelMapName = {1}, position = {2}, beaconName = {3}",
+                storageName, prefabVoxelMapName, position));
+
             var filePath = MyWorldGenerator.GetVoxelPrefabPath(prefabVoxelMapName);
             var storage = MyStorageBase.LoadFromFile(filePath);
             if (storage == null) return null;
@@ -76,6 +80,7 @@ namespace Sandbox.Game.Entities
                 storage.Size.AbsMax() * MyVoxelConstants.VOXEL_SIZE_IN_METRES,
                 MySession.Static.Settings.VoxelGeneratorVersion);
             return MyWorldGenerator.AddVoxelMap(storageName, storage, position);
+            //return MyWorldGenerator.AddAndReturnAsteroidPrefab(prefabVoxelMapName, position, storageName);
         }
 
         IMyStorage IMyVoxelMaps.CreateStorage(byte[] data)

@@ -140,6 +140,7 @@ namespace Sandbox.Game.Gui
             pastedVoxelMap.EntityId = msg.EntityId;
             pastedVoxelMap.Init(storageName, storage, asteroid.Position - storage.Size * 0.5f);
             MyEntities.Add(pastedVoxelMap);
+            //MyWorldGenerator.AddVoxelMap(storageName, storage, asteroid.Position - storage.Size * 0.5f, msg.EntityId);
         }
 
         public static void SendAsteroid(Vector3D position)

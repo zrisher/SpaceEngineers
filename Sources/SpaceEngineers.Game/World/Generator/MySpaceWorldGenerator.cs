@@ -1,4 +1,5 @@
-﻿using Sandbox.Common.ObjectBuilders;
+﻿using Sandbox;
+using Sandbox.Common.ObjectBuilders;
 using Sandbox.Game;
 using Sandbox.Game.Entities;
 using Sandbox.Game.World;
@@ -163,6 +164,7 @@ namespace SpaceEngineers.Game.World.Generator
         // Backward compatibility method only used when the procedurally generated asteroids were not working
         private static void AddPregeneratedAsteroid(string name, float scale)
         {
+            MySandboxGame.Log.WriteLine("ZZZ - MySpaceWorldGenerator AddPregeneratedAsteroid");
             Vector3 position = m_compatStaticAsteroids[name] * scale;
             MyWorldGenerator.AddAsteroidPrefab("Pregen\\" + name, position, name);
         }

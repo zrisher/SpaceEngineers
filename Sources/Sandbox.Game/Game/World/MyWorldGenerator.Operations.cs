@@ -118,11 +118,15 @@ namespace Sandbox.Game.World
 
             public override void Apply()
             {
+                MySandboxGame.Log.WriteLine("ZZZ - MyWorldGenerator OperationAddAsteroidPrefab Apply()");
                 MyWorldGenerator.AddAsteroidPrefab(PrefabName, Position, Name);
+                //MyWorldGenerator.AddAsteroidPrefab(PrefabName, Position, Name, true);
             }
 
             public override void Init(MyObjectBuilder_WorldGeneratorOperation builder)
             {
+                MySandboxGame.Log.WriteLine(String.Format("ZZZ - MyWorldGenerator OperationAddAsteroidPrefab Init() - Position {0}",
+                    Position));
                 base.Init(builder);
                 var ob = builder as MyObjectBuilder_WorldGeneratorOperation_AddAsteroidPrefab;
 

@@ -82,6 +82,8 @@ namespace Sandbox.Game.World.Generator
 
         public static bool PlaceEncounterToWorld(BoundingBoxD boundingVolume, int seed, MyObjectSeedType seedType)
         {
+            MySandboxGame.Log.WriteLine(string.Format("ZZZ - PlaceEncounterToWorld: boundingVolume = '{0}', seed = {1}, seedType = {2}",
+                boundingVolume, seed, seedType));
             if (MySession.Static.Settings.EnableEncounters == false)
             {
                 return false;
@@ -147,6 +149,13 @@ namespace Sandbox.Game.World.Generator
                         var storage = MyStorageBase.LoadFromFile(filePath);
                         storage.DataProvider = MyCompositeShapeProvider.CreateAsteroidShape(0, 1.0f, MySession.Static.Settings.VoxelGeneratorVersion);
                         IMyEntity voxel = MyWorldGenerator.AddVoxelMap(String.Format("Asteroid_{0}_{1}_{2}", m_entityToEncounterConversion.Count, seed, m_random.Next()), storage, m_placePositions[i] + selectedVoxel.Offset);
+                        /*
+                        IMyEntity voxel = MyWorldGenerator.AddAndReturnAsteroidPrefab(
+                            selectedVoxel.StorageName,
+                            m_placePositions[i] + selectedVoxel.Offset,
+                            String.Format("Asteroid_{0}_{1}_{2}", m_entityToEncounterConversion.Count, seed, m_random.Next())
+                            );
+                        */
                         voxel.Save = false;
                         voxel.OnPhysicsChanged += OnCreatedEntityChanged;
                         m_entityToEncounterConversion[voxel] = m_encountersId[i];

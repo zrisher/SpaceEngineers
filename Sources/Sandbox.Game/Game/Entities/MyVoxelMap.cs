@@ -7,6 +7,7 @@ using Sandbox.Engine.Voxels;
 using Sandbox.Game.Components;
 using Sandbox.Game.Multiplayer;
 using Sandbox.Game.World;
+using Sandbox.Game.World.Generator;
 using System.Diagnostics;
 using System.Threading;
 
@@ -85,6 +86,45 @@ namespace Sandbox.Game.Entities
                 StorageName = string.Format("{0}-{1}", ob.StorageName, m_immutableStorageNameSalt++);
             }
 
+            //=== Load VoxelMap
+            /*
+            MySandboxGame.Log.WriteLine(String.Format(
+                "Init new voxel from ob: storageName {0}, entityId {1}, seed {2}, size {3}, prefabname {4}, Untouched {5}",
+                ob.StorageName, ob.EntityId, ob.ProceduralSeed, ob.ProceduralSize, ob.PrefabName, ob.Untouched));
+
+            // Load storage if it's been changed from its first generation, otherwise generate
+            if (ob.Untouched)
+            {
+                MySandboxGame.Log.WriteLine(String.Format(
+                    "VoxelMap has changed from initial generation, load from storage {0}", ob.StorageName));
+                //m_storage = MyStorageBase.Load(ob.StorageName);
+            }
+            else if (ob.ProceduralSeed > 0 && ob.ProceduralSize > 0)
+            {
+                MySandboxGame.Log.WriteLine(String.Format(
+                    "Load procedural VoxelMap with seed {0} and size {1}", ob.ProceduralSeed, ob.ProceduralSize));
+
+                //m_storage = MyAsteroidCellGenerator.GenerateProceduralAsteroidStorage(ob.Seed, ob.Size);
+                MySandboxGame.Log.WriteLine("Voxel unchanged, load from procedural seed");
+                var provider = MyCompositeShapeProvider.CreateAsteroidShape(
+                    ob.Seed, ob.Size, MySession.Static.Settings.VoxelGeneratorVersion);
+                MyStorageBase storage = new MyOctreeStorage(
+                    provider, MyAsteroidCellGenerator.GetAsteroidVoxelSize(ob.Size));
+
+                m_storage = storage;
+
+            }
+            else if (ob.PrefabName != "")
+            {
+                MySandboxGame.Log.WriteLine(String.Format(
+                    "Load VoxelMap from prefab {0}", ob.ProceduralSeed, ob.ProceduralSize));
+                // m_storage = MyAsteroidCellGenerator.GeneratePrefabAsteroidStorage(ob.PrefabName);
+            }
+            else
+            {
+                MySandboxGame.Log.WriteLine("Unable to load asteroid");
+            }
+            */
             m_storage = MyStorageBase.Load(ob.StorageName);
             m_storage.RangeChanged += storage_RangeChanged;
             m_storageMax = m_storage.Size;

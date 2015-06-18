@@ -234,8 +234,36 @@ namespace Sandbox.Game.World
             AddVoxelMap(name, storage, position);
         }
 
+        /*
+        public static void AddAsteroidPrefab(string prefabName, Vector3 position, string name, bool randomize = false) {
+            AddAndReturnAsteroidPrefab(prefabName, position, name, randomize);
+        }
+
+        public static MyVoxelMap AddAndReturnAsteroidPrefab(string prefabName, Vector3 position, string name, bool randomize = false) {
+            MySandboxGame.Log.WriteLine(string.Format("ZZZ - Adding Asteroid Prefab: prefabName = '{0}', position = {1}, name = {2}",
+                prefabName, position, name));
+            var fileName = GetVoxelPrefabPath(prefabName);
+            var storage = LoadVoxelMapPrefab(fileName, randomize);
+            return AddVoxelMap(name, storage, position);
+        }
+
+        public static void AddAndReturnProceduralAsteroid(int seed, int size, Vector3 position, string name, long entityId) {
+            var provider = MyCompositeShapeProvider.CreateAsteroidShape(seed, size, MySession.Static.Settings.VoxelGeneratorVersion);
+            MyStorageBase storage = new MyOctreeStorage(provider, GetAsteroidVoxelSize(size));
+            var voxelMap = MyWorldGenerator.AddVoxelMap(name, storage, position, entityId);
+        }
+
+        private static Vector3I GetAsteroidVoxelSize(double asteroidRadius) {
+            int radius = Math.Max(64, (int)Math.Ceiling(asteroidRadius));
+            return new Vector3I(radius);
+        }
+         */
+
         public static MyVoxelMap AddVoxelMap(string storageName, MyStorageBase storage, Vector3 positionMinCorner, long entityId = 0)
         {
+            MySandboxGame.Log.WriteLine(string.Format("ZZZ - Adding new voxel map to world: storageName = '{0}', storage = {1}, entityId = {2}",
+                storageName, storage, entityId));
+
             var voxelMap = new MyVoxelMap();
             voxelMap.EntityId = entityId;
             voxelMap.Init(storageName, storage, positionMinCorner);
@@ -269,6 +297,9 @@ namespace Sandbox.Game.World
 
         private static void SetupBase(string basePrefabName, Vector3 offset, string voxelFilename, string beaconName = null)
         {
+            MySandboxGame.Log.WriteLine(string.Format("ZZZ - SetupBase: basePrefabName = '{0}', offset = {1}, voxelFilename = {2}, beaconName = {3}",
+                basePrefabName, offset, voxelFilename, beaconName));
+
             // Add one inital asteroid underneath the base. The base and the asteroid right now are hardcoded.
             // Maybe we can add some base+asteroid combinations later and select one randomly
             MyPrefabManager.Static.SpawnPrefab(
@@ -282,14 +313,18 @@ namespace Sandbox.Game.World
             // Small red block on landing gears.
             MyPrefabManager.Static.AddShipPrefab("SmallShip_SingleBlock", Matrix.CreateTranslation(new Vector3(-5.20818424f, -0.442984432f, -8.31522751f) + offset));
 
+            // Asteroid
             var filePath = GetVoxelPrefabPath("VerticalIsland_128x128x128");
             var storage = LoadRandomizedVoxelMapPrefab(filePath);
             AddVoxelMap(voxelFilename, storage, new Vector3(-20, -110, -60) + offset);
+            //AddAsteroidPrefab("VerticalIsland_128x128x128", new Vector3(-20, -110, -60) + offset, voxelFilename);
         }
 
         private static MyStorageBase LoadRandomizedVoxelMapPrefab(string prefabFilePath)
         {
             var storage = MyStorageBase.LoadFromFile(prefabFilePath);
+            //if (storage == null) return null;
+            //int seed = (randomize) ? MyUtils.GetRandomInt(int.MaxValue - 1) + 1 : 0;
             storage.DataProvider = MyCompositeShapeProvider.CreateAsteroidShape(
                 MyUtils.GetRandomInt(int.MaxValue - 1) + 1,
                 storage.Size.AbsMax() * MyVoxelConstants.VOXEL_SIZE_IN_METRES,
