@@ -20,7 +20,7 @@ namespace Sandbox.Game.Screens.Helpers
 
         private MyControllableEntityControlHelper m_lightsControlHelper;
         private MyControllableEntityControlHelper m_helmetControlHelper;
-        private MyControllableEntityControlHelper m_dampingControlHelper;
+        private MyControllableEntityControlHelper m_dampingControlHelper; 
         private MyControllableEntityControlHelper m_broadcastingControlHelper;
         //private MyControllableEntityControlHelper m_landingGearsControlHelper;
         private MyControllableEntityControlHelper m_reactorsControlHelper;

@@ -94,10 +94,6 @@
       <SpecificVersion>False</SpecificVersion>
       <HintPath>..\..\3rd\SteamSDK\$(Configuration)\$(Platform)\SteamSDK.dll</HintPath>
     </Reference>
-    <Reference Include="RakNet">
-      <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\..\3rd\RakNet\$(Configuration)\$(Platform)\RakNet.dll</HintPath>
-    </Reference>
     <Reference Include="System" />
     <Reference Include="System.Core" />
     <Reference Include="System.Drawing" />
@@ -1287,10 +1283,6 @@
     <ProjectReference Include="..\VRage.Input\VRage.Input.csproj">
       <Project>{f77d0a49-f0a1-4e8a-80c8-cbf1842bf2d4}</Project>
       <Name>VRage.Input</Name>
-    </ProjectReference>
-    <ProjectReference Include="..\VRage.Network\VRage.Network.csproj">
-      <Project>{76080059-9756-4065-bce8-373e7150a8f7}</Project>
-      <Name>VRage.Network</Name>
     </ProjectReference>
     <ProjectReference Include="..\VRage.Library\VRage.Library.csproj">
       <Project>{26FE022E-42AB-40BE-BA9D-97CBE34E7D99}</Project>
