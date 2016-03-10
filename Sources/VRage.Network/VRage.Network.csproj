@@ -74,12 +74,6 @@
     <Compile Include="IMyServerCallback.cs" />
     <Compile Include="MyChannelEnum.cs" />
     <Compile Include="MyClientEntry.cs" />
-    <Compile Include="MyRakNetConnectionException.cs" />
-    <Compile Include="MyRakNetStartupException.cs" />
-    <Compile Include="MyRakNetClient.cs" />
-    <Compile Include="MyRakNetLogger.cs" />
-    <Compile Include="MyRakNetPeer.cs" />
-    <Compile Include="MyRakNetServer.cs" />
     <Compile Include="Rpc\CallSite.cs" />
     <Compile Include="Rpc\CallSiteCache.cs" />
     <Compile Include="Rpc\CallSite`1.cs" />
