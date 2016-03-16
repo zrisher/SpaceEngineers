@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Diagnostics;
 using Sandbox.Common;
 using Sandbox.Engine.Physics;
 using Sandbox.Engine.Utils;
@@ -43,17 +44,33 @@ namespace Sandbox.Game.Weapons
     // Imho quite a lot
     class MyProjectile
     {
+        //  DEFLECTED projectiles live a little while before being KILLED.
         //  Projectiles are killed in two states. First we get collision/timeout in update, but still need to draw
         //  trail polyline, so we can't remove it from buffer. Second state is after 'killed' projectile is drawn
         //  and only then we remove it from buffer.
         enum MyProjectileStateEnum : byte
         {
             ACTIVE,
+            DEFLECTED,
             KILLED,
             KILLED_AND_DRAWN
         }
 
+        internal struct HitInfo
+        {
+            public IMyEntity Entity;
+            public Vector3D Position;
+            public Vector3 Normal;
+            public bool Headshot;
+        }
+
+        const bool DEBUG_DRAW_PROJECTILES = false;
         const int CHECK_INTERSECTION_INTERVAL = 5; //projectile will check for intersection each n-th frame with n*longer line
+        const int DEBUG_DRAW_EXTRA_FRAMES = 60 * 20; // How long to keep debug trails around
+        const int DEFLECTED_MAX_FRAMES = 75; // How long to wait before killing deflected projectiles
+        const float DEFAULT_SURFACE_ELASTICITY = .10f; // How far a block's surface will stretch before giving way
+        const float DEFAULT_TRAIL_LENGTH = 40; // Multiplied by ammo definition's trail factor
+        const float DEFLECTED_SPEED_FACTOR = 0.5f; // Lose about 70% of energy, sqrt(.5) ~= .7
 
         //  IMPORTANT: This class isn't realy inicialized by constructor, but by Start()
         //  So don't initialize members here, do it in Start()
@@ -69,7 +86,14 @@ namespace Sandbox.Game.Weapons
         MyEntity m_ignoreEntity;
         MyEntity m_weapon;
 
-        public float LengthMultiplier = 1;
+        bool m_drawTrail;
+        int m_debugDrawExtraFrames;
+        int m_framesSinceDeflected;
+        int m_mass;
+        double m_distanceTraveled;
+        double m_knownForwardClearance;
+        HitInfo? m_nextHit;
+        List<HitInfo> m_hits;
 
         //  Type of this projectile
         MyProjectileAmmoDefinition m_projectileAmmoDefinition;
@@ -77,16 +101,8 @@ namespace Sandbox.Game.Weapons
         public MyEntity OwnerEntity = null;//rifle, block, ...
         public MyEntity OwnerEntityAbsolute = null;//character, main ship cockpit, ...
 
-        int m_checkIntersectionIndex; //actual index to keep distributed checking intersection
-        static int checkIntersectionCounter = 0; //counter of started projectiles
-        //Vector3 m_positionToCheck; //position which needs to be tested for line intersection
-        bool m_positionChecked;
-
         private VRage.Game.Models.MyIntersectionResultLineTriangleEx? m_intersection = null;
         private List<MyLineSegmentOverlapResult<MyEntity>> m_entityRaycastResult = null;
-
-        // Default 50% of energy is consumed by damage
-        private const float m_impulseMultiplier = 0.5f; 
 
         public MyProjectile()
         {
@@ -94,6 +110,9 @@ namespace Sandbox.Game.Weapons
 
         //  This method realy initiates/starts the missile
         //  IMPORTANT: Direction vector must be normalized!
+        //  ALSO IMPORTANT: Every single instance variable MUST be reset here, because projectiles are recycled.
+        //   A KILLED_AND_DRAWN projectile will be restarted with new info.
+        //   You CANNOT rely on default values.
         // Projectile count multiplier - when real rate of fire it 45, but we shoot only 10 projectiles as optimization count multiplier will be 4.5
         public void Start(MyProjectileAmmoDefinition ammoDefinition, MyEntity ignoreEntity, Vector3D origin, Vector3 initialVelocity, Vector3 directionNormalized, MyEntity weapon)
         {
@@ -107,9 +126,10 @@ namespace Sandbox.Game.Weapons
             m_weapon = weapon;
 
             if (ammoDefinition.ProjectileTrailProbability >= MyUtils.GetRandomFloat(0, 1))
-                LengthMultiplier = 40;
+                m_drawTrail = true;
             else
-                LengthMultiplier = 0;
+                m_drawTrail = false;
+
                         /*
             if (MyConstants.EnableAimCorrection)
             {
@@ -126,11 +146,17 @@ namespace Sandbox.Game.Weapons
             m_speed = ammoDefinition.DesiredSpeed * (ammoDefinition.SpeedVar > 0.0f ? MyUtils.GetRandomFloat(1 - ammoDefinition.SpeedVar, 1 + ammoDefinition.SpeedVar) : 1.0f);
             m_velocity = initialVelocity + m_directionNormalized * m_speed; ;
             m_maxTrajectory = ammoDefinition.MaxTrajectory * MyUtils.GetRandomFloat(0.8f, 1.2f); // +/- 20%
+            m_mass = (int)(2 * m_projectileAmmoDefinition.ProjectileMassDamage / (ammoDefinition.DesiredSpeed * ammoDefinition.DesiredSpeed));
 
-            m_checkIntersectionIndex = checkIntersectionCounter % CHECK_INTERSECTION_INTERVAL;
-            checkIntersectionCounter += 3;
-            m_positionChecked = false;
+            m_distanceTraveled = m_knownForwardClearance = 0;
+            m_framesSinceDeflected = m_debugDrawExtraFrames = 0;
+            m_nextHit = null;
+            if (m_hits == null)
+                m_hits = new List<HitInfo>();
+            else
+                m_hits.Clear();
 
+            // prefetch planet voxels in our path
             LineD line = new LineD(m_origin, m_origin + m_directionNormalized * m_maxTrajectory);
 
             if (m_entityRaycastResult == null)
@@ -159,9 +185,18 @@ namespace Sandbox.Game.Weapons
         //  Return false if projectile dies/timeouts in this tick.
         public bool Update()
         {
+            // Projectile was deflected, kill after a few seconds
+            if (m_state == MyProjectileStateEnum.DEFLECTED)
+            {
+                m_framesSinceDeflected++;
+                if (m_framesSinceDeflected >= DEFLECTED_MAX_FRAMES)
+                    m_state = MyProjectileStateEnum.KILLED;
+            }
+
             //  Projectile was killed , but still not last time drawn, so we don't need to do update (we are waiting for last draw)
             if (m_state == MyProjectileStateEnum.KILLED)
                 return true;
+
             //  Projectile was killed and last time drawn, so we can finally remove it from buffer
             if (m_state == MyProjectileStateEnum.KILLED_AND_DRAWN)
             {
@@ -169,95 +204,33 @@ namespace Sandbox.Game.Weapons
                 return false;
             }
 
-            Vector3D position = m_position;
-            m_position += m_velocity * VRage.Game.MyEngineConstants.UPDATE_STEP_SIZE_IN_SECONDS;
-
             //  Distance timeout
-            Vector3 positionDelta = m_position - m_origin;
-            if (Vector3.Dot(positionDelta, positionDelta) >= m_maxTrajectory * m_maxTrajectory)
+            if (m_distanceTraveled >= m_maxTrajectory)
             {
                 StopEffect();
                 m_state = MyProjectileStateEnum.KILLED;
                 return true;
             }
 
-            m_checkIntersectionIndex = ++m_checkIntersectionIndex % CHECK_INTERSECTION_INTERVAL;
-            if (m_checkIntersectionIndex != 0 && m_positionChecked) //check only each n-th intersection
-                return true;
-
-            //  Calculate hit point, create decal and throw debris particles
-            Vector3D lineEndPosition = position + CHECK_INTERSECTION_INTERVAL * (m_velocity * VRage.Game.MyEngineConstants.UPDATE_STEP_SIZE_IN_SECONDS);
-
-            LineD line = new LineD(m_positionChecked ? position : m_origin, lineEndPosition);
-            m_positionChecked = true;
-
-            IMyEntity entity;
-            Vector3D hitPosition;
-            Vector3 hitNormal;
-            bool headShot;
-
-            GetHitEntityAndPosition(line, out entity, out hitPosition, out hitNormal, out headShot);
-            if (entity == null || entity == m_ignoreEntity || entity.Physics == null)
-                return true;
-            if ((m_ignoreEntity is IMyGunBaseUser) && (m_ignoreEntity as IMyGunBaseUser).Owner is MyCharacter
-                && (m_ignoreEntity as IMyGunBaseUser).Owner == entity)
-            {
-                return true; // prevent player shooting himself
-            }
-
+            // Simulate travel and hits
             ProfilerShort.Begin("Projectile.Update");
-
-            {
-                MyCharacter hitCharacter = entity as MyCharacter;
-                if (hitCharacter != null)
-                {
-                    IStoppableAttackingTool stoppableTool = hitCharacter.CurrentWeapon as IStoppableAttackingTool;
-                    if (stoppableTool != null)
-                        stoppableTool.StopShooting(OwnerEntity);
-                }
-            }
-
-            m_position = hitPosition;
-
-            bool isProjectileGroupKilled = false;
-
-            if (!isProjectileGroupKilled)
-            {
-                MySurfaceImpactEnum surfaceImpact;
-                MyStringHash materialType;
-                GetSurfaceAndMaterial(entity, ref  hitPosition, out surfaceImpact, out materialType);
-
-                PlayHitSound(materialType, entity, hitPosition);
-                DoDamage(headShot ? m_projectileAmmoDefinition.ProjectileHeadShotDamage : m_projectileAmmoDefinition.ProjectileMassDamage, hitPosition, entity);
-                //  Create smoke and debris particle at the place of voxel/model hit
-                if (surfaceImpact != MySurfaceImpactEnum.CHARACTER)
-                    m_projectileAmmoDefinition.ProjectileOnHitParticles(ref hitPosition, ref hitNormal, ref line.Direction, entity, m_weapon, 1, OwnerEntity);
-
-                if (surfaceImpact == MySurfaceImpactEnum.CHARACTER && entity is MyCharacter)
-                {
-                    MyStringHash bullet = MyStringHash.GetOrCompute("RifleBullet");//temporary
-                    MyMaterialPropertiesHelper.Static.TryCreateCollisionEffect(
-                                        MyMaterialPropertiesHelper.CollisionType.Start,
-                                        hitPosition,
-                                        hitNormal,
-                                        bullet, materialType);
-                }
-
-                Vector3D particleHitPosition = hitPosition + line.Direction * -0.2;
-                m_projectileAmmoDefinition.ProjectileOnHitMaterialParticles(ref particleHitPosition, ref hitNormal, ref line.Direction, entity, surfaceImpact, m_weapon, 1);
-
-                CreateDecal(materialType);
-
-                if (m_weapon == null || (entity.GetTopMostParent() != m_weapon.GetTopMostParent()))
-                    ApplyProjectileForce(entity, hitPosition, m_directionNormalized, false, m_projectileAmmoDefinition.ProjectileHitImpulse * m_impulseMultiplier);
-
-                StopEffect();
-                m_state = MyProjectileStateEnum.KILLED;
-            }
+            UpdateTravel();
             ProfilerShort.End();
             return true;
         }
 
+        #region Entity Helpers
+
+        /// <summary>
+        /// Get hit details for the first non-ignored entity in the projectile's path
+        /// </summary>
+        /// <remarks>
+        /// We do two types of tests - 1) a physics raycast and 2) an entities line overlap test.
+        /// 1 is cheaper because it uses a pruning structure, but apparently it misses characters and hitboxes are all prisms.
+        /// 2 takes longer but provides model-level collision, so hit points are much more accurate on things that aren't perfect rectangular prisms.
+        /// Unfortunately, 2 also tends to provide the wrong hit normals for under-construction blocks and misses (more) of closed airtight doors.
+        /// So we use 1 unless we find a character in the path with 2.
+        /// </remarks>
         private void GetHitEntityAndPosition(LineD line, out IMyEntity entity, out Vector3D hitPosition, out Vector3 hitNormal, out bool hitHead)
         {
             entity = null;
@@ -292,6 +265,12 @@ namespace Sandbox.Game.Weapons
                     entity = hitInfo.Value.HkHitInfo.GetHitEntity() as MyEntity;
                     hitPosition = hitInfo.Value.Position;
                     hitNormal = hitInfo.Value.HkHitInfo.Normal;
+
+                    if (IsIgnoredEntity(entity, hitNormal))
+                    {
+                        entity = null;
+                        hitPosition = hitNormal = Vector3.Zero;
+                    }
                 }
             }
 
@@ -320,7 +299,7 @@ namespace Sandbox.Game.Weapons
                         VRage.Game.Models.MyIntersectionResultLineTriangleEx? t;
                         hitCharacter.GetIntersectionWithLine(ref line, out t, out hitHead);
 
-                        if (t != null)
+                        if (t != null && !IsIgnoredEntity(entity, t.Value.NormalInWorldSpace))
                         {
                             double distanceSq = Vector3D.DistanceSquared(t.Value.IntersectionPointInWorldSpace, line.From);
                             if (distanceSq < bestDistanceSq)
@@ -350,7 +329,7 @@ namespace Sandbox.Game.Weapons
                 MyCharacter hitCharacter = entity as MyCharacter;
                 VRage.Game.Models.MyIntersectionResultLineTriangleEx? t;
                 hitCharacter.GetIntersectionWithLine(ref line, out t, out hitHead);
-                if (t == null)
+                if (t == null || IsIgnoredEntity(entity, t.Value.NormalInWorldSpace))
                 {
                     entity = null; // no hit.
                 }
@@ -367,11 +346,13 @@ namespace Sandbox.Game.Weapons
             }
         }
 
-        private void DoDamage(float damage, Vector3D hitPosition, IMyEntity damagedEntity)
+        private void DoDamage(float damage, Vector3D hitPosition, IMyDestroyableObject destroyable)
         {
+            if (destroyable == null) return;
+
             //damage tracking
             MyEntity ent = (MyEntity)MySession.Static.ControlledEntity;
-            if (this.OwnerEntityAbsolute != null && this.OwnerEntityAbsolute.Equals(MySession.Static.ControlledEntity) && (damagedEntity is IMyDestroyableObject || damagedEntity is MyCubeGrid))
+            if (this.OwnerEntityAbsolute != null && this.OwnerEntityAbsolute.Equals(MySession.Static.ControlledEntity))
             {
                 MySession.Static.TotalDamageDealt += (uint)damage;
             }
@@ -379,46 +360,27 @@ namespace Sandbox.Game.Weapons
             if (!Sync.IsServer)
                 return;
 
-            if (m_projectileAmmoDefinition.ProjectileType == MyProjectileType.Bolt)
-            {
-                if (damagedEntity is IMyDestroyableObject && damagedEntity is MyCharacter)
-                    (damagedEntity as IMyDestroyableObject).DoDamage(damage, MyDamageType.Bolt, true, attackerId: m_weapon != null ? GetSubpartOwner(m_weapon).EntityId : 0);
-            }
-            else
-            {
-                if (damagedEntity is MyCubeGrid)
-                {
-                    var grid = damagedEntity as MyCubeGrid;
-                    if (grid.Physics != null && grid.Physics.Enabled && grid.BlocksDestructionEnabled)
-                    {
-                        bool causeDeformation = false;
-                        Vector3I blockPos;
-                        grid.FixTargetCube(out blockPos, Vector3D.Transform(hitPosition, grid.PositionComp.WorldMatrixNormalizedInv) / grid.GridSize);
-                        var block = grid.GetCubeBlock(blockPos);
-                        if (block != null)
-                        {
-                            (block as IMyDestroyableObject).DoDamage(damage, MyDamageType.Bullet, true, attackerId: m_weapon != null ? GetSubpartOwner(m_weapon).EntityId : 0);
-                            if (block.FatBlock == null)
-                                causeDeformation = true;
-                        }
+            // Determine damage attributes depending on hit object
+            long attackerId = m_weapon != null ? GetSubpartOwner(m_weapon).EntityId : 0;
+            MyStringHash damageType = MyDamageType.Bullet;
+            MyCubeGrid gridToDeform = null;
 
-                        if (causeDeformation)
-                            ApllyDeformationCubeGrid(hitPosition, grid);
-                    }
-                }
-                //By Gregory: When MyEntitySubpart (e.g. extended parts of pistons and doors) damage the whole parent component
-                //Temporary fix! Maybe other solution? MyEntitySubpart cannot implement IMyDestroyableObject cause is on dependent namespace
-                else if (damagedEntity is MyEntitySubpart)
-                {
-                    if (damagedEntity.Parent != null && damagedEntity.Parent.Parent is MyCubeGrid)
-                    {
-                        DoDamage(damage, damagedEntity.Parent.WorldAABB.Center, damagedEntity.Parent.Parent);
-                    }
-
-                }
-                else if (damagedEntity is IMyDestroyableObject)
-                    (damagedEntity as IMyDestroyableObject).DoDamage(damage, MyDamageType.Bullet, true, attackerId: m_weapon != null ? GetSubpartOwner(m_weapon).EntityId : 0);
+            if (destroyable is MyCharacter)
+            {
+                if (m_projectileAmmoDefinition.ProjectileType == MyProjectileType.Bolt)
+                    damageType = MyDamageType.Bolt;
             }
+            else if (destroyable is MySlimBlock)
+            {
+                gridToDeform = ((MySlimBlock)destroyable).CubeGrid;
+            }
+
+            // Do Damage
+            destroyable.DoDamage(damage, damageType, true, attackerId: attackerId);
+
+            if (gridToDeform != null)
+                ApplyDeformationCubeGrid(hitPosition, gridToDeform, damage);
+
 
             //Handle damage ?? some WIP code by Ondrej
             //MyEntity damagedObject = entity;
@@ -427,6 +389,57 @@ namespace Sandbox.Game.Weapons
             //    MyMultiplayerGameplay.Static.ProjectileHit(damagedObject, intersectionValue.IntersectionPointInWorldSpace, this.m_directionNormalized, MyAmmoConstants.FindAmmo(m_ammoProperties), this.OwnerEntity);
 
         }
+
+        /// <summary>
+        /// Tells us if an entity is to be ignored for collision checking.
+        /// </summary>
+        /// <remarks>
+        /// We ignore everything without physics, the gun that shot the projectile,
+        /// and entities with a positive hit normal (i.e. we're hitting it from "inside" the entity)
+        /// </summary>
+        private bool IsIgnoredEntity(IMyEntity entity, Vector3 hitNormal)
+        {
+            return entity == null || entity.Physics == null || entity == m_ignoreEntity ||
+                ((m_ignoreEntity is IMyGunBaseUser) &&
+                    (m_ignoreEntity as IMyGunBaseUser).Owner is MyCharacter &&
+                    (m_ignoreEntity as IMyGunBaseUser).Owner == entity) ||
+                (Vector3D.Dot(hitNormal, m_directionNormalized) > 0);
+        }
+
+        /// <summary>
+        /// Find the destroyable object at hitPosition on damagedEntity
+        /// </summary>
+        private IMyDestroyableObject GetDestroyableObject(Vector3D hitPosition, IMyEntity damagedEntity)
+        {
+            // If it's already destroyable, we're set!
+            if (damagedEntity is IMyDestroyableObject)
+                return damagedEntity as IMyDestroyableObject;
+
+            // If it's a cubegrid, find the block at hitposition
+            if (damagedEntity is MyCubeGrid)
+            {
+                var grid = damagedEntity as MyCubeGrid;
+                if (grid.Physics != null && grid.Physics.Enabled && grid.BlocksDestructionEnabled)
+                {
+                    Vector3I blockPos;
+                    grid.FixTargetCube(out blockPos, Vector3D.Transform(hitPosition, grid.PositionComp.WorldMatrixNormalizedInv) / grid.GridSize);
+                    var block = grid.GetCubeBlock(blockPos);
+
+                    if (block != null)
+                        return block;
+                }
+
+                return null;
+            }
+
+            //By Gregory: When MyEntitySubpart (e.g. extended parts of pistons and doors) damage the whole parent component
+            //Temporary fix! Maybe other solution? MyEntitySubpart cannot implement IMyDestroyableObject cause is on dependent namespace
+            if (damagedEntity is MyEntitySubpart && damagedEntity.Parent != null && damagedEntity.Parent.Parent is MyCubeGrid)
+                return GetDestroyableObject(damagedEntity.Parent.WorldAABB.Center, damagedEntity.Parent.Parent);
+
+            return null;
+        }
+
 
         private MyEntity GetSubpartOwner(MyEntity entity)
         {
@@ -445,6 +458,351 @@ namespace Sandbox.Game.Weapons
             else
                 return result;
         }
+
+        #endregion
+        #region Ballistic Trajectory Simulation
+
+        /// <summary>
+        /// Calculate clearance for the next CHECK_INTERSECTION_INTERVAL frames
+        /// </summary>
+        /// <remarks>
+        /// This will fail to find an entity that moves into the projectile's trajectory between checks.
+        /// But with a small CHECK_INTERSECTION_INTERVAL it will appear as a believable near miss.
+        /// </remarks>
+        private void UpdateClearance()
+        {
+            Vector3 end = m_position + CHECK_INTERSECTION_INTERVAL * (m_velocity * VRage.Game.MyEngineConstants.UPDATE_STEP_SIZE_IN_SECONDS);
+            LineD line = new LineD(m_position, end);
+
+            IMyEntity hitEntity;
+            Vector3D hitPosition;
+            Vector3 hitNormal;
+            bool hitHeadshot;
+
+            GetHitEntityAndPosition(line, out hitEntity, out hitPosition, out hitNormal, out hitHeadshot);
+
+            if (hitEntity != null)
+            {
+                m_nextHit = new HitInfo() { Entity = hitEntity, Position = hitPosition, Normal = hitNormal, Headshot = hitHeadshot };
+                m_knownForwardClearance = (hitPosition - m_position).Length();
+            }
+            else
+            {
+                m_nextHit = null;
+                m_knownForwardClearance = line.Length;
+            }
+        }
+
+        /// <summary>
+        /// Simulate travel
+        /// </summary>
+        /// <remarks>
+        /// When we hit something, we wait a frame to move again so the game can update block destruction in our path.
+        /// Technically this slows the projectile, but it should be imperceptible to the player.
+        /// </remarks>
+        private void UpdateTravel()
+        {
+            double desiredTravelDistance = m_speed * VRage.Game.MyEngineConstants.UPDATE_STEP_SIZE_IN_SECONDS;
+
+            // If we're out of known clearance but we aren't about to hit something, update clearance
+            if (m_knownForwardClearance < desiredTravelDistance && m_nextHit == null)
+                UpdateClearance();
+
+            // If we have enough space ahead to move a full frame, do so and return
+            if (m_knownForwardClearance >= desiredTravelDistance)
+            {
+                m_position += m_directionNormalized * desiredTravelDistance;
+                m_distanceTraveled += desiredTravelDistance;
+                m_knownForwardClearance -= desiredTravelDistance;
+                return;
+            }
+
+            // Otherwise, move forward the space we can
+            if (m_knownForwardClearance > 0)
+            {
+                m_position += m_directionNormalized * m_knownForwardClearance;
+                m_distanceTraveled += m_knownForwardClearance;
+                m_knownForwardClearance = 0;
+            }
+
+            // And deal with what's in our way - do the hit and update velocity
+            if (m_nextHit == null || m_nextHit.Value.Entity == null)
+            {
+                Debug.Assert(false, "Projectile next hit should exist when updated clearance < desired distance.");
+                return;
+            }
+            m_velocity = DoBallisticInteraction(m_nextHit.Value);
+            Debug.Assert(m_velocity.Length() <= m_speed, "Projectile speed should not be increased by ballistic interation.");
+
+            m_directionNormalized = Vector3D.Normalize(m_velocity);
+            m_speed = (float)m_velocity.Length();
+            m_hits.Insert(0, m_nextHit.Value);
+            m_nextHit = null;
+        }
+
+        /// <summary>
+        /// Do visual/sound effects for hits, apply damage and impulse on hit entity, and return new velocity
+        /// </summary>
+        private Vector3D DoBallisticInteraction(HitInfo hit)
+        {
+            if (hit.Entity == null)
+            {
+                Debug.Assert(false, "Projectile ballistic interaction should receive non-null hit entity.");
+                return Vector3D.Zero;
+            }
+
+            // Interrupt shooting characters
+            MyCharacter hitCharacter = hit.Entity as MyCharacter;
+            if (hitCharacter != null)
+            {
+                IStoppableAttackingTool stoppableTool = hitCharacter.CurrentWeapon as IStoppableAttackingTool;
+                if (stoppableTool != null)
+                    stoppableTool.StopShooting(OwnerEntity);
+            }
+
+            // Get material properties for effects
+            MySurfaceImpactEnum surfaceImpact;
+            MyStringHash materialType;
+            GetSurfaceAndMaterial(hit.Entity, ref  hit.Position, out surfaceImpact, out materialType);
+
+            // Sound effect
+            PlayHitSound(materialType, hit.Entity, hit.Position);
+
+            // Visual effects - Create smoke and debris particle at the place of voxel/model hit
+            if (surfaceImpact == MySurfaceImpactEnum.CHARACTER && hit.Entity is MyCharacter)
+            {
+                MyStringHash bullet = MyStringHash.GetOrCompute("RifleBullet");//temporary
+                MyMaterialPropertiesHelper.Static.TryCreateCollisionEffect(
+                                    MyMaterialPropertiesHelper.CollisionType.Start,
+                                    hit.Position,
+                                    hit.Normal,
+                                    bullet, materialType);
+            }
+            else
+            {
+                m_projectileAmmoDefinition.ProjectileOnHitParticles(ref hit.Position, ref hit.Normal, ref m_directionNormalized, hit.Entity, m_weapon, 1, OwnerEntity);
+            }
+
+            Vector3D particleHitPosition = hit.Position + m_directionNormalized * -0.2;
+            m_projectileAmmoDefinition.ProjectileOnHitMaterialParticles(ref particleHitPosition, ref hit.Normal, ref m_directionNormalized, hit.Entity, surfaceImpact, m_weapon, 1);
+
+            CreateDecal(materialType);
+
+            // Damage and impulse effects
+            float damage;
+            float impulse;
+            Vector3D newVelocity;
+
+            // Note that checking for the destroyable here gets us the most up-to-date target if hitting a cubegrid
+            IMyDestroyableObject destroyable = GetDestroyableObject(hit.Position, hit.Entity);
+
+            if (destroyable != null)
+            {
+                TryPenetrate(hit.Normal, destroyable, m_velocity, m_mass, out damage, out impulse, out newVelocity);
+
+                if (damage > 0)
+                {
+                    if (hit.Headshot)
+                        damage *= m_projectileAmmoDefinition.ProjectileHeadShotDamage / m_projectileAmmoDefinition.ProjectileMassDamage;
+
+                    DoDamage(damage, hit.Position, destroyable);
+                }
+
+                if (impulse > 0 && (m_weapon == null || m_weapon.GetTopMostParent() != hit.Entity.GetTopMostParent()))
+                        ApplyProjectileForce(hit.Entity, hit.Position, hit.Normal, false, impulse);
+            }
+            else
+            {
+                // We've hit an indestructible object, stop here.
+                if (hit.Entity is MyVoxelMap)
+                {
+                    // TODO: Damage voxels with projectiles
+                    // We could remove a portion of the voxel according to its density, but it's expensive. 
+                    // We could only do it given a certain weapon rate of fire and burst rate, though.
+                }
+                else
+                {
+                    Debug.Assert(false, "Projectile hit an unknown destroyable object: " + hit.Entity.ToString());
+                }
+
+                newVelocity = Vector3D.Zero;
+            }
+
+            return newVelocity;
+        }
+
+        /// <summary>
+        /// Determines the interaction between a projectile and a hit entity
+        /// Gives us the damage and impulse done to the object and the new velocity of the projectile
+        /// </summary>
+        private void TryPenetrate(Vector3 hitNormal, IMyDestroyableObject hitEntity, Vector3D initialVelocity, float mass,
+            out float damage, out float impulse, out Vector3D newVelocity)
+        {
+
+            damage = 0;
+            impulse = 0;
+
+            Vector3D initialDirection = Vector3D.Normalize(initialVelocity);
+            float initialSpeed = (float)initialVelocity.Length();
+            float initialEnergy = .5f * mass * initialSpeed * initialSpeed;
+
+            // === Calculate the counter-force applied to projectile by entity
+
+            // find energy applied by projectile to entity against the surface normal
+            double normalRatio;
+            Vector3D.Dot(ref initialDirection, ref hitNormal, out normalRatio);
+            if (normalRatio > 0)
+            {
+                Debug.Assert(false, "Projectile hit normal ratio should be <= 0.");
+                normalRatio *= -1;
+            }
+            Vector3D velocityAgainstSurfaceNormal = initialSpeed * normalRatio * (Vector3D)hitNormal;
+            float energyAgainstSurfaceNormal = initialEnergy * -1 * (float)normalRatio;
+
+            // find the energy applied to projectile by entity along surface normal
+            float entityIntegrity = hitEntity.Integrity;
+            if (hitEntity is MySlimBlock)
+                entityIntegrity /= ((MySlimBlock)hitEntity).DamageRatio * ((MySlimBlock)hitEntity).DeformationRatio;
+            float potentialDeflectionEnergy = entityIntegrity * DEFAULT_SURFACE_ELASTICITY * hitEntity.ProjectileResistance / m_projectileAmmoDefinition.ProjectilePenetration;
+            float deflectionEnergy = Math.Min(energyAgainstSurfaceNormal, potentialDeflectionEnergy);
+
+            // === Affect the projectile and object accordingly
+            newVelocity = initialVelocity;
+
+            // if object provides enough resistance, deflect the projectile
+            if (energyAgainstSurfaceNormal <= deflectionEnergy)
+            {
+                // There are a lot of ways we could derive reflection index and energy absorption; these are rough approximations
+                newVelocity += (2 - deflectionEnergy / potentialDeflectionEnergy) * -1 * velocityAgainstSurfaceNormal;
+                newVelocity *= DEFLECTED_SPEED_FACTOR;
+                m_state = MyProjectileStateEnum.DEFLECTED; // flag for removal
+            }
+            else {
+                // remove the energy expended overcoming deflection
+                float energyRemaining = Math.Max(0, initialEnergy - deflectionEnergy);
+
+                // if object provides enough integrity to stop projectile
+                if (energyRemaining <= entityIntegrity)
+                {
+                    // stop it and convert remaining energy to damage
+                    newVelocity = Vector3D.Zero;
+                    damage = energyRemaining;
+                }
+                // otherwise, we're penetrating
+                else
+                {
+                    // remove the energy expended passing through the block
+                    damage = entityIntegrity;
+                    energyRemaining -= entityIntegrity;
+
+                    // apply defraction, sin (1) / sin(2) = n2 / n1
+                    double speedRatio = Math.Sqrt(energyRemaining / initialEnergy);
+                    Debug.Assert(0 <= speedRatio && speedRatio <= 1, "Projectile speedRatio of " + speedRatio.ToString() + " should be between 0 and 1.");
+                    Vector3D newDirection = initialDirection * speedRatio - (Vector3D)hitNormal * (1 - speedRatio);
+                    newDirection = Vector3D.Normalize(newDirection); // since hitNormal has less precision the result is often just a little short
+                    newVelocity = newDirection * initialSpeed * speedRatio;
+                }
+
+            }
+
+            // calculate impulse provided to the hit object
+            impulse = mass * (float)(initialVelocity - newVelocity).Length();
+        }
+
+        #endregion
+        #region Draw
+
+        public void Draw()
+        {
+            if (m_state == MyProjectileStateEnum.KILLED)
+            {
+                m_debugDrawExtraFrames++;
+                if (!DEBUG_DRAW_PROJECTILES || m_debugDrawExtraFrames >= DEBUG_DRAW_EXTRA_FRAMES)
+                    m_state = MyProjectileStateEnum.KILLED_AND_DRAWN;
+            }
+
+            if (m_drawTrail) DrawTrail();
+            if (DEBUG_DRAW_PROJECTILES) DebugDraw();
+        }
+
+        private void DrawTrail()
+        {
+            double desiredTrailLength = DEFAULT_TRAIL_LENGTH *
+                m_projectileAmmoDefinition.ProjectileTrailScale *
+                m_speed / m_projectileAmmoDefinition.DesiredSpeed *
+                MyUtils.GetRandomFloat(0.6f, 0.8f);
+
+            float color = MyUtils.GetRandomFloat(1, 2);
+            float thickness = MyUtils.GetRandomFloat(0.2f, 0.3f) * m_projectileAmmoDefinition.ProjectileTrailScale;
+
+            // Line particles (polyline) don't look good in distance. Start and end aren't rounded anymore and they just
+            // look like a pieces of paper. Especially when zoomed-in.
+            thickness *= MathHelper.Lerp(0.2f, 0.8f, MySector.MainCamera.Zoom.GetZoomLevel());
+
+            double remainingDrawLength = desiredTrailLength;
+            Vector3D lastTrailPoint = m_position;
+
+            foreach (HitInfo hit in m_hits)
+            {
+                if (remainingDrawLength <= 0) break;
+
+                DrawTrailSegment(lastTrailPoint, hit.Position, color, thickness, ref remainingDrawLength);
+                lastTrailPoint = hit.Position;
+            }
+
+            if (remainingDrawLength > 0)
+                DrawTrailSegment(lastTrailPoint, m_origin, color, thickness, ref remainingDrawLength);
+        }
+
+        /// <summary>
+        /// Draw the projectile trail from one point to another.
+        /// Limited to trailLengthRemaining, which is adjusted after drawing
+        /// </summary>
+        public void DrawTrailSegment(Vector3D from, Vector3D to, float color, float thickness, ref double trailLengthRemaining)
+        {
+            double length = Vector3D.Distance(from, to);
+            Vector3D direction = Vector3D.Normalize(to - from);
+            if (length > trailLengthRemaining) length = trailLengthRemaining;
+
+            if (length > 0)
+            {
+                if (m_projectileAmmoDefinition.ProjectileTrailMaterial != null)
+                {
+                    MyTransparentGeometry.AddLineBillboard(
+                        m_projectileAmmoDefinition.ProjectileTrailMaterial,
+                        new Vector4(m_projectileAmmoDefinition.ProjectileTrailColor, 1),
+                        from, direction, (float)length, thickness);
+                }
+                else
+                {
+                    MyTransparentGeometry.AddLineBillboard("ProjectileTrailLine",
+                        new Vector4(m_projectileAmmoDefinition.ProjectileTrailColor * color, 1),
+                        from, direction, (float)length, thickness);
+                }
+
+                trailLengthRemaining -= length;
+            }
+        }
+
+        /// <summary>
+        /// Debug draw the projectile's path, its hits, and the hit normals
+        /// </summary>
+        private void DebugDraw()
+        {
+            Vector3D lastPoint = m_position;
+            foreach (HitInfo hit in m_hits)
+            {
+                VRageRender.MyRenderProxy.DebugDrawLine3D(lastPoint, hit.Position, Color.Red, Color.Green, false);
+                VRageRender.MyRenderProxy.DebugDrawSphere(hit.Position, .1f, Color.Red, .8f, false);
+                VRageRender.MyRenderProxy.DebugDrawLine3D(hit.Position, hit.Position + hit.Normal, Color.Orange, Color.Orange, false);
+                lastPoint = hit.Position;
+            }
+
+            VRageRender.MyRenderProxy.DebugDrawLine3D(lastPoint, m_origin, Color.Red, Color.Green, false);
+        }
+
+        #endregion
+        #region Hit Effects
 
         private static void GetSurfaceAndMaterial(IMyEntity entity, ref Vector3D hitPosition, out MySurfaceImpactEnum surfaceImpact, out MyStringHash materialType)
         {
@@ -579,15 +937,15 @@ namespace Sandbox.Game.Weapons
             }
         }
 
-        private void ApllyDeformationCubeGrid(Vector3D hitPosition, MyCubeGrid grid)
+        private void ApplyDeformationCubeGrid(Vector3D hitPosition, MyCubeGrid grid, float damage)
         {
             MatrixD gridInv = grid.PositionComp.WorldMatrixNormalizedInv;
             var hitPositionInObjectSpace = Vector3D.Transform(hitPosition, gridInv);
             var hitDirLoc = Vector3D.TransformNormal(m_directionNormalized, gridInv);
 
-            float deformationOffset = 0.000664f * m_projectileAmmoDefinition.ProjectileMassDamage;
-            float softAreaPlanar = 0.011904f * m_projectileAmmoDefinition.ProjectileMassDamage;
-            float softAreaVertical = 0.008928f * m_projectileAmmoDefinition.ProjectileMassDamage;
+            float deformationOffset = 0.000664f * damage;
+            float softAreaPlanar = 0.011904f * damage;
+            float softAreaVertical = 0.008928f * damage;
             softAreaPlanar = MathHelper.Clamp(softAreaPlanar, grid.GridSize * 0.75f, grid.GridSize * 1.3f);
             softAreaVertical = MathHelper.Clamp(softAreaVertical, grid.GridSize * 0.9f, grid.GridSize * 1.3f);
             grid.Physics.ApplyDeformation(deformationOffset, softAreaPlanar, softAreaVertical, hitPositionInObjectSpace, hitDirLoc, MyDamageType.Bullet);
@@ -605,76 +963,7 @@ namespace Sandbox.Game.Weapons
             }
         }
 
-        //  Draw the projectile but only if desired polyline trail distance can fit in the trajectory (otherwise we will see polyline growing from the origin and it's ugly).
-        //  Or draw if this is last draw of this projectile (useful for short-distance shots).
-        public void Draw()
-        {
-            const float PROJECTILE_POLYLINE_DESIRED_LENGTH = 120;
-
-            //var velPerFrame = m_velocity * VRage.Game.MyEngineConstants.PHYSICS_STEP_SIZE_IN_SECONDS;
-            //for (int i = 0; i < 70; i += 5)
-            //{
-            //    Color col = new Color(255, 0, i * 5, 255);
-            //    VRageRender.MyRenderProxy.DebugDrawLine3D(m_position + i * velPerFrame, m_position + i * velPerFrame + 5 * velPerFrame, col, Color.Yellow, false);
-            //}
-
-            double trajectoryLength = Vector3D.Distance(m_position, m_origin);
-            if ((trajectoryLength > 0) || (m_state == MyProjectileStateEnum.KILLED))
-            {
-                if (m_state == MyProjectileStateEnum.KILLED)
-                {
-                    m_state = MyProjectileStateEnum.KILLED_AND_DRAWN;
-                }
-
-                if (!m_positionChecked)
-                    return;
-             
-                //  If we calculate previous position using normalized direction (insted of velocity), projectile trails will 
-                //  look like coming from cannon, and that is desired. Even during fast movement, acceleration, rotation or changes in movement directions.
-                //Vector3 previousPosition = m_position - m_directionNormalized * projectileTrailLength * 1.05f;
-                Vector3D previousPosition = m_position - m_directionNormalized * PROJECTILE_POLYLINE_DESIRED_LENGTH * VRage.Game.MyEngineConstants.UPDATE_STEP_SIZE_IN_SECONDS;
-                //Vector3 previousPosition = m_previousPosition;
-                //Vector3 previousPosition = m_initialSunWindPosition - MyMwcUtils.Normalize(m_desiredVelocity) * projectileTrailLength;
-
-                Vector3D direction = Vector3D.Normalize(m_position - previousPosition);
-
-                double projectileTrailLength = LengthMultiplier * m_projectileAmmoDefinition.ProjectileTrailScale;// PROJECTILE_POLYLINE_DESIRED_LENGTH;
-
-                projectileTrailLength *= MyUtils.GetRandomFloat(0.6f, 0.8f);
-
-                if (trajectoryLength < projectileTrailLength)
-                {
-                    projectileTrailLength = trajectoryLength;
-                }
-
-                previousPosition = m_position - projectileTrailLength * direction;
-
-
-                //float color = MyMwcUtils.GetRandomFloat(1, 2);
-                float color = MyUtils.GetRandomFloat(1, 2);
-                float thickness = MyUtils.GetRandomFloat(0.2f, 0.3f) * m_projectileAmmoDefinition.ProjectileTrailScale;
-
-                //  Line particles (polyline) don't look good in distance. Start and end aren't rounded anymore and they just
-                //  look like a pieces of paper. Especially when zoom-in.
-                thickness *= MathHelper.Lerp(0.2f, 0.8f, MySector.MainCamera.Zoom.GetZoomLevel());
-
-                float alphaCone = 1;
-                
-                if (projectileTrailLength > 0)
-                {
-                    if (m_projectileAmmoDefinition.ProjectileTrailMaterial != null)
-                    {
-                        MyTransparentGeometry.AddLineBillboard(m_projectileAmmoDefinition.ProjectileTrailMaterial, new Vector4(m_projectileAmmoDefinition.ProjectileTrailColor, 1),
-                            previousPosition, direction, (float)projectileTrailLength, thickness);
-                    }
-                    else
-                    {
-                        MyTransparentGeometry.AddLineBillboard("ProjectileTrailLine", new Vector4(m_projectileAmmoDefinition.ProjectileTrailColor * color, 1) * alphaCone,
-                            previousPosition, direction, (float)projectileTrailLength, thickness);
-                    }
-                }                
-            }
-        }
+        #endregion
 
         public void Close()
         {
