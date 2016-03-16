@@ -26,6 +26,45 @@ using VRage.Game.Models;
 using VRage.Game.Entity;
 using VRage.Game;
 
+// zzz done:
+// * investigate code and figure out how to implement
+// * begin implementing
+// * fix getdestroyableentity for subparts, doesn't parse correctly
+// * fix impact effects not playing - seems to just be a running from source issue, still there with no changes from master - ERROR: Loading of particles library failed: System.Xml.XmlException: 'EndElement' is an invalid XmlNodeType. Line 647, position 7.
+//   at System.Xml.XmlReader.ReadStartElement()
+//   at VRage.Animations.MyAnimatedProperty`1.Deserialize(XmlReader reader) in c:\Sites\zrisher\spaceengineers\Sources\VRage\Animations\MyAnimatedProperty.cs:line 481
+// * fix shooting through things on deflection
+// * draw entire hit ray over multiple turns
+// * redo logic flow to more accurately depict travel
+// * add debugging display for hit locations, normals, and path
+// * fix shooting through subparts - Some parts of the subpart model for airtight doors (bottom of old, sides of middle of new) 
+//     don't seem to be properly added to the physics or Render models. So if it's not returned by the rough raycast, you can bet that
+//     we'll find the entity on our line intersection test, but MyEntity.GetIntersectionWithLine won't properly take that subpart model into effect,
+//     causing us to be able to shoot through some parts of doors. Nothing I can do about this one.
+// * fix hitting entities from inside and wrong impact normals
+// * fix too much energy left after deflection
+// * penetration - seems like we hit the same block multiple times before passing through it. 
+//   removing the velocity adjustment fixed it for armor, but functional blocks still have the same problem
+//   after changing frame loop to do each frame, we can see the issue is checking hits still same frame after do hit
+//   need to adjust logic closer to original, try to get it pretty close
+// * refraction
+// * test with real damage
+// * fix entity state messed up when restarted, all sorts of weird bugs - start RECYCLES the projectile, must reset all vars
+// * fix deflection keeps entities around too long - introduce lifetime limits
+// * edit data to balance projectile for vanilla
+// * fix damagesystem can cause penetration loops
+// * fix server-client desync on penetration
+// * cleanup and minimize variable usage
+// * flip debug flags, remove remaining logging lines
+
+// zzz doing:
+// * fix impulse math and make impact relative to target point velocity
+// * brief feature tests again
+// * difference screenshots
+// * performance testing - need to rerun now that draw bug fixed :.(
+// * commit cleanup
+// * craft the issues and PR
+
 namespace Sandbox.Game.Weapons
 {
 
@@ -70,6 +109,8 @@ namespace Sandbox.Game.Weapons
         const int CHECK_INTERSECTION_INTERVAL = 5; //projectile will check for intersection each n-th frame with n*longer line
         const int DEBUG_DRAW_EXTRA_FRAMES = 60 * 20; // How long to keep debug trails around
         const int DEFLECTED_MAX_FRAMES = 75; // How long to wait before killing deflected projectiles
+        const int JOULES_PER_DAMAGE = 15;
+        const int MIN_SPEED = 15;
         const float DEFAULT_TRAIL_LENGTH = 40; // Multiplied by ammo definition's trail factor
         const float DEFLECTED_SPEED_FACTOR = 0.5f; // Lose about 70% of energy, sqrt(.5) ~= .7
 
@@ -92,7 +133,7 @@ namespace Sandbox.Game.Weapons
         bool m_closed;
         int m_debugDrawExtraFrames;
         int m_framesSinceDeflected;
-        float m_kineticDamage;
+        float m_mass;
         double m_distanceTraveled;
         double m_knownForwardClearance;
         HitInfo? m_nextHit;
@@ -157,7 +198,7 @@ namespace Sandbox.Game.Weapons
             m_speed = ammoDefinition.DesiredSpeed * (ammoDefinition.SpeedVar > 0.0f ? MyUtils.GetRandomFloat(1 - ammoDefinition.SpeedVar, 1 + ammoDefinition.SpeedVar) : 1.0f);
             m_velocity = initialVelocity + m_directionNormalized * m_speed; ;
             m_maxTrajectory = ammoDefinition.MaxTrajectory * MyUtils.GetRandomFloat(0.8f, 1.2f); // +/- 20%
-            m_kineticDamage = 2 * m_projectileAmmoDefinition.ProjectileMassDamage / (ammoDefinition.DesiredSpeed * ammoDefinition.DesiredSpeed);
+            m_mass = 2 * m_projectileAmmoDefinition.ProjectileMassDamage * JOULES_PER_DAMAGE / (ammoDefinition.DesiredSpeed * ammoDefinition.DesiredSpeed);
 
             // prefetch planet voxels in our path
             LineD line = new LineD(m_origin, m_origin + m_directionNormalized * m_maxTrajectory);
@@ -199,8 +240,8 @@ namespace Sandbox.Game.Weapons
                 return false;
             }
 
-            //  Distance timeout
-            if (m_distanceTraveled >= m_maxTrajectory)
+            //  Distance and speed timeout
+            if (m_distanceTraveled >= m_maxTrajectory || m_speed < MIN_SPEED)
             {
                 StopEffect();
                 m_state = MyProjectileStateEnum.KILLED;
@@ -589,10 +630,11 @@ namespace Sandbox.Game.Weapons
                 Debug.Assert(false, "Projectile next hit should exist when updated clearance < desired distance.");
                 return;
             }
+
             m_velocity = DoBallisticInteraction(m_nextHit.Value);
 
             // And deal with what's in our way - do the hit and update velocity
-            if (!(m_velocity.Length() <= m_speed)) {
+            if (m_velocity.Length() > m_speed) {
                 Debug.Assert(false, "Projectile speed should not be increased by ballistic interation.");
             }
 
@@ -607,7 +649,6 @@ namespace Sandbox.Game.Weapons
         /// </summary>
         private Vector3D DoBallisticInteraction(HitInfo hit)
         {
-
             if (hit.Entity == null)
             {
                 Debug.Assert(false, "Projectile ballistic interaction should receive non-null hit entity.");
@@ -658,7 +699,7 @@ namespace Sandbox.Game.Weapons
 
             if (hit.Destroyable != null)
             {
-                TryPenetrate(hit.Normal, hit.Destroyable, m_velocity, m_kineticDamage, out damage, out impulse, out newVelocity);
+                TryPenetrate(hit.Normal, hit.Destroyable, m_velocity, m_mass, out damage, out impulse, out newVelocity);
 
                 if (damage > 0)
                 {
@@ -703,7 +744,7 @@ namespace Sandbox.Game.Weapons
 
             Vector3D initialDirection = Vector3D.Normalize(initialVelocity);
             float initialSpeed = (float)initialVelocity.Length();
-            float initialEnergy = .5f * mass * initialSpeed * initialSpeed;
+            float initialDamage = .5f * mass * initialSpeed * initialSpeed / JOULES_PER_DAMAGE;
 
             // === Calculate the counter-force applied to projectile by entity
 
@@ -716,48 +757,48 @@ namespace Sandbox.Game.Weapons
                 normalRatio *= -1;
             }
             Vector3D velocityAgainstSurfaceNormal = initialSpeed * normalRatio * (Vector3D)hitNormal;
-            float energyAgainstSurfaceNormal = initialEnergy * -1 * (float)normalRatio;
+            float damageAgainstSurfaceNormal = initialDamage * -1 * (float)normalRatio;
 
             // find the energy applied to projectile by entity along surface normal
-            float potentialDeflectionEnergy = hitEntity.ProjectileResistance / m_projectileAmmoDefinition.ProjectilePenetration;
+            float potentialDamageDeflected = hitEntity.ProjectileResistance / m_projectileAmmoDefinition.ProjectilePenetration;
             if (hitEntity is MySlimBlock && !((MySlimBlock)hitEntity).IsFullIntegrity)
-                potentialDeflectionEnergy *= ((MySlimBlock)hitEntity).Integrity / ((MySlimBlock)hitEntity).MaxIntegrity;
+                potentialDamageDeflected *= ((MySlimBlock)hitEntity).Integrity / ((MySlimBlock)hitEntity).MaxIntegrity;
 
-            float deflectionEnergy = Math.Min(energyAgainstSurfaceNormal, potentialDeflectionEnergy);
+            float damageDeflected = Math.Min(damageAgainstSurfaceNormal, potentialDamageDeflected);
 
             // === Affect the projectile and object accordingly
             newVelocity = initialVelocity;
 
             // if object provides enough resistance, deflect the projectile
-            if (energyAgainstSurfaceNormal <= deflectionEnergy)
+            if (damageAgainstSurfaceNormal <= damageDeflected)
             {
                 // There are a lot of ways we could derive reflection index and energy absorption; these are rough approximations
-                newVelocity += (2 - deflectionEnergy / potentialDeflectionEnergy) * -1 * velocityAgainstSurfaceNormal;
+                newVelocity += (2 - damageDeflected / potentialDamageDeflected) * -1 * velocityAgainstSurfaceNormal;
                 newVelocity *= DEFLECTED_SPEED_FACTOR;
                 m_state = MyProjectileStateEnum.DEFLECTED; // flag for removal
             }
             else {
                 // remove the energy expended overcoming deflection
-                float energyRemaining = Math.Max(0, initialEnergy - deflectionEnergy);
+                float damageRemaining = Math.Max(0, initialDamage - damageDeflected);
 
-                // find the energy the object can absorb
+                // find the damage the object can absorb
                 float entityIntegrity = hitEntity.Integrity;
                 if (hitEntity is MySlimBlock)
                     entityIntegrity /= ((MySlimBlock)hitEntity).DamageRatio * ((MySlimBlock)hitEntity).DeformationRatio;
 
                 // if object provides enough integrity to stop projectile
-                if (energyRemaining <= entityIntegrity)
+                if (damageRemaining <= entityIntegrity)
                 {
                     // stop it and convert remaining energy to damage
                     newVelocity = Vector3D.Zero;
-                    damage = energyRemaining;
+                    damage = damageRemaining;
                 }
                 // otherwise, we're penetrating
                 else
                 {
                     // remove the energy expended passing through the block
                     damage = entityIntegrity;
-                    energyRemaining -= entityIntegrity;
+                    damageRemaining -= entityIntegrity;
 
                     // Note: We track this object to ensure we don't hit it again later.
                     // Normally it would be removed before next frame, 
@@ -768,7 +809,7 @@ namespace Sandbox.Game.Weapons
                     m_PenetratedObjects.Add(hitEntity);
 
                     // apply defraction, sin (1) / sin(2) = n2 / n1
-                    double speedRatio = Math.Sqrt(energyRemaining / initialEnergy);
+                    double speedRatio = Math.Sqrt(damageRemaining / initialDamage);
                     Debug.Assert(0 <= speedRatio && speedRatio <= 1, "Projectile speedRatio of " + speedRatio.ToString() + " should be between 0 and 1.");
                     Vector3D newDirection = initialDirection * speedRatio - (Vector3D)hitNormal * (1 - speedRatio);
                     newDirection = Vector3D.Normalize(newDirection); // since hitNormal has less precision the result is often just a little short
