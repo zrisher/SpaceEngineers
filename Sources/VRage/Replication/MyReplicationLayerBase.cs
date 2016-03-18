@@ -49,8 +49,8 @@ namespace VRage.Network
                 MethodInfo info = callSiteGetter(arg).Method;
                 if (!info.HasAttribute<EventAttribute>())
                     throw new InvalidOperationException(String.Format("Event '{0}' in type '{1}' is missing attribute '{2}'", info.Name, info.DeclaringType.Name, typeof(EventAttribute).Name));
-                else if (!info.DeclaringType.HasAttribute<StaticEventOwnerAttribute>() && !typeof(IMyEventProxy).IsAssignableFrom(info.DeclaringType) && !typeof(IMyNetObject).IsAssignableFrom(info.DeclaringType))
-                    throw new InvalidOperationException(String.Format("Event '{0}' is defined in type '{1}', which does not implement '{2}' or '{3}' or has attribute '{4}'", info.Name, info.DeclaringType.Name, typeof(IMyEventOwner).Name, typeof(IMyNetObject).Name, typeof(StaticEventOwnerAttribute).Name));
+                //else if (!info.DeclaringType.HasAttribute<StaticEventOwnerAttribute>() && !typeof(IMyEventProxy).IsAssignableFrom(info.DeclaringType) && !typeof(IMyNetObject).IsAssignableFrom(info.DeclaringType))
+                    //throw new InvalidOperationException(String.Format("Event '{0}' is defined in type '{1}', which does not implement '{2}' or '{3}' or has attribute '{4}'", info.Name, info.DeclaringType.Name, typeof(IMyEventOwner).Name, typeof(IMyNetObject).Name, typeof(StaticEventOwnerAttribute).Name));
                 else
                     throw new InvalidOperationException(String.Format("Event '{0}' not found, is declaring type '{1}' registered within replication layer?", info.Name, info.DeclaringType.Name));
             }
