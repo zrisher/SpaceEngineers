@@ -105,13 +105,14 @@ namespace VRage.Game
             {
                 DescriptionString = builder.Description;
             }
-
+            /*
             Debug.Assert(!Context.IsBaseGame || !Public || string.IsNullOrWhiteSpace(builder.DisplayName) || (DisplayNameEnum.HasValue && builder.DisplayName.StartsWith("DisplayName_")),
                 string.Format("Bad display name '{0}' on definition '{1}'. It should either be empty, or it must start with 'DisplayName_' and have corresponding text enum defined.",
                     builder.DisplayName, Id));
             Debug.Assert(!Context.IsBaseGame || !Public || string.IsNullOrWhiteSpace(builder.Description) || (DescriptionEnum.HasValue && builder.Description.StartsWith("Description_")),
                 string.Format("Bad description '{0}' on definition '{1}'. It should either be empty, or it must start with 'Description_' and have corresponding text enum defined.",
                     builder.Description, Id));
+            */ 
         }
 
         /// <summary>

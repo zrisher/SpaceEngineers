@@ -134,8 +134,8 @@ namespace VRage.Game
 
             m_errors.Add(e);
 
-            if (context.ModName == null)
-                Debug.Fail(e.ToString());
+            //if (context.ModName == null)
+                //Debug.Fail(e.ToString());
 
             if (writeToLog)
                 WriteError(e);
