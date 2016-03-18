@@ -214,6 +214,7 @@ namespace Sandbox.Game
 
         void StartInternal()
         {
+            MySandboxGame.Log.WriteLine("MyExplosion.StartInternal");
             VRageRender.MyRenderProxy.GetRenderProfiler().StartProfilingBlock("MyExplosion.StartInternal");
 
             m_velocity = m_explosionInfo.Velocity;
@@ -319,6 +320,7 @@ namespace Sandbox.Game
 
         private void RemoveDestroyedObjects()
         {
+            MySandboxGame.Log.WriteLine("MyExplosion.RemoveDestroyedObjects");
             Debug.Assert(Sync.IsServer);
             VRageRender.MyRenderProxy.GetRenderProfiler().StartProfilingBlock("RemoveDestroyedObjects");
             bool gridWasHit = false;
@@ -457,15 +459,22 @@ namespace Sandbox.Game
 
         private bool ApplyVolumetricExplosion(ref MyExplosionInfo m_explosionInfo, ref BoundingSphereD influenceExplosionSphere, List<MyEntity> entities)
         {
+            MySandboxGame.Log.WriteLine("MyExplosion.ApplyVolumetricExplosion - this is where the magic happens");
+
             bool gridWasHit = false;
 
             ApplyExplosionOnVoxel(ref m_explosionInfo);
 
+            // Get all entities in explosion sphere
             var damageInfo = ApplyVolumetricExplosionOnGrid(ref m_explosionInfo, ref influenceExplosionSphere, entities);
+
             if ((m_explosionInfo.ExplosionFlags & MyExplosionFlags.APPLY_DEFORMATION) == MyExplosionFlags.APPLY_DEFORMATION)
             {
+                //calc damage
                 damageInfo.ExplosionDamage.ComputeDamagedBlocks();
                 gridWasHit = damageInfo.GridWasHit;
+
+                // do damage
                 ApplyVolumetriDamageToGrid(damageInfo, m_explosionInfo.OwnerEntity != null ? m_explosionInfo.OwnerEntity.EntityId : 0);
             }
 
@@ -875,6 +884,7 @@ namespace Sandbox.Game
 
         private void ApplyVolumetriDamageToGrid(MyDamageInfo damageInfo, long attackerId)
         {
+            MySandboxGame.Log.WriteLine("MyExplosion.ApplyVolumetricDamageToGrid");
             var damagedBlocks = damageInfo.ExplosionDamage.DamagedBlocks;
             var explodedBlocks = damageInfo.AffectedCubeBlocks;
             var explodedGrids = damageInfo.AffectedCubeGrids;
@@ -897,6 +907,8 @@ namespace Sandbox.Game
             {
                 foreach (var damagedBlock in damagedBlocks)
                 {
+                    MySandboxGame.Log.WriteLine(" - Iterating over damage block " + damagedBlock.ToString());
+
                     var cubeBlock = damagedBlock.Key;
                     if (cubeBlock.FatBlock != null && cubeBlock.FatBlock.MarkedForClose)
                         continue;
@@ -909,23 +921,36 @@ namespace Sandbox.Game
                     if (cubeBlock.UseDamageSystem)
                         MyDamageSystem.Static.RaiseBeforeDamageApplied(cubeBlock, ref checkInfo);
 
+                    MySandboxGame.Log.WriteLine(" - Damage system modified damage: " + checkInfo.Amount.ToString());
+
+                    MySandboxGame.Log.WriteLine(" - No fatblock? " + (cubeBlock.FatBlock == null).ToString());
+                    MySandboxGame.Log.WriteLine(" - Integrity (" + cubeBlock.Integrity.ToString() + ") / DeformationRatio (" + cubeBlock.DeformationRatio.ToString() + ") < modified damage (" + checkInfo.Amount.ToString() + ") ?");
                     if (cubeBlock.FatBlock == null && cubeBlock.Integrity / cubeBlock.DeformationRatio < checkInfo.Amount)
                     {
                         VRageRender.MyRenderProxy.GetRenderProfiler().StartProfilingBlock("RemoveBlock");
                         cubeBlock.CubeGrid.RemoveDestroyedBlock(cubeBlock);
+                        MySandboxGame.Log.WriteLine(" - Removed destroyed slimblock");
                         VRageRender.MyRenderProxy.GetRenderProfiler().EndProfilingBlock();
                     }
                     else
                     {
                         VRageRender.MyRenderProxy.GetRenderProfiler().StartProfilingBlock("ApplyDestructionDeformation");
+
                         float damage = damagedBlock.Value;
                         if (cubeBlock.FatBlock != null)
                         {
                             damage *= 7f;
                         }
+                        MySandboxGame.Log.WriteLine(" - No fatblock or calc false, applying unmodified damage " + damage.ToString());
+
+                        MySandboxGame.Log.WriteLine(" - Doing damage to cubeblock");
+                        MySandboxGame.Log.WriteLine(" -  Dmg:   " + damage);
+                        MySandboxGame.Log.WriteLine(" -  Block: " + cubeBlock.ToString());
                         (cubeBlock as IMyDestroyableObject).DoDamage(damage, MyDamageType.Explosion, true);
+                        MySandboxGame.Log.WriteLine(" -  Cubeblock remaining integrity: " + cubeBlock.Integrity.ToString());
                         if (!cubeBlock.IsDestroyed)
                         {
+                            MySandboxGame.Log.WriteLine(" - Block not destroyed, doing deformation");
                             cubeBlock.CubeGrid.ApplyDestructionDeformation(cubeBlock);
                         }
                         VRageRender.MyRenderProxy.GetRenderProfiler().EndProfilingBlock();

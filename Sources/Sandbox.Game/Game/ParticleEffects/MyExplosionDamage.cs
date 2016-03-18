@@ -44,6 +44,8 @@ namespace Sandbox.Game
                 return m_damagedBlocks;
             }
         }
+
+        // What on earth does this represent?
         Dictionary<MySlimBlock, MyRaycastDamageInfo> m_damageRemaining = new Dictionary<MySlimBlock, MyRaycastDamageInfo>();
         public Dictionary<MySlimBlock, MyRaycastDamageInfo> DamageRemaining
         {
@@ -83,26 +85,51 @@ namespace Sandbox.Game
         {
             VRageRender.MyRenderProxy.GetRenderProfiler().StartProfilingBlock("Volumetric explosion raycasts");
 
+            MySandboxGame.Log.WriteLine("MyExplosionDamage.ComputeDamagedBlocks");
+            MySandboxGame.Log.WriteLine("Computing damage for " + m_blocksInRadius.Count.ToString() + " blocks in explosion radius" );
+
             foreach (var cubeBlock in m_blocksInRadius)
             {
+                MySandboxGame.Log.WriteLine(" - Calculating damage ray for block in sphere " + cubeBlock.ToString());
+
                 m_castBlocks.Clear();
                 MyRaycastDamageInfo startDamage = CastDDA(cubeBlock);
+
+                MySandboxGame.Log.WriteLine(" -   Ray end distance from explosion: " + startDamage.DistanceToExplosion.ToString());
+                MySandboxGame.Log.WriteLine(" -   Ray damage remaining (whatever that means): " + startDamage.DamageRemaining.ToString());
+                MySandboxGame.Log.WriteLine(" -   Ray block count " + m_castBlocks.Count.ToString());
 
                 while (m_castBlocks.Count > 0)
                 {
                     var cube = m_castBlocks.Pop();
 
+                    MySandboxGame.Log.WriteLine(" -- Iterating over block in Ray " + cube.ToString());
+
                     Vector3D cubeWorldPosition;
                     cube.ComputeWorldCenter(out cubeWorldPosition);
                     float distanceToExplosion = (float)(cubeWorldPosition - m_explosion.Center).Length();
 
+                    MySandboxGame.Log.WriteLine(" --  Block's distanceToExplosion: " + distanceToExplosion.ToString());
+
                     if (startDamage.DamageRemaining > 0f)
                     {
+
+                        MySandboxGame.Log.WriteLine(" -- Ray damage remaining > 0, calcing damage on this block. ");
+
                         float distanceFactor = 1f - (distanceToExplosion - startDamage.DistanceToExplosion) / ((float)m_explosion.Radius - startDamage.DistanceToExplosion);
+                        //MySandboxGame.Log.WriteLine(" -- Distance factor: 1f - (" + distanceToExplosion.ToString() + " - " + startDamage.DistanceToExplosion + ") / (" + m_explosion.Radius.ToString() + " - " + startDamage.DistanceToExplosion + ")");
+                        MySandboxGame.Log.WriteLine(" --  distanceFactor: " + distanceFactor.ToString());
+
+
                         if (distanceFactor > 0)
                         {
+                            MySandboxGame.Log.WriteLine(" --  DeformationRatio: " + cube.DeformationRatio.ToString());
                             m_damagedBlocks.Add(cube, startDamage.DamageRemaining * distanceFactor * cube.DeformationRatio);
+
+                            MySandboxGame.Log.WriteLine(" --  Dealt damage: " + (startDamage.DamageRemaining * distanceFactor * cube.DeformationRatio).ToString());
+
                             startDamage.DamageRemaining = Math.Max(0f, startDamage.DamageRemaining * distanceFactor - cube.Integrity / cube.DeformationRatio);
+                            MySandboxGame.Log.WriteLine(" --  Ray damage remaining adjusted to: " + startDamage.DamageRemaining.ToString());
                             startDamage.DistanceToExplosion = distanceToExplosion;
                         }
                     }
@@ -110,6 +137,8 @@ namespace Sandbox.Game
                     {
                         startDamage.DamageRemaining = 0f;
                     }
+
+                    //MySandboxGame.Log.WriteLine(" --  Saving this block and the current state of the damage array in m_damageRemaining");
                     m_damageRemaining.Add(cube, startDamage);
                 }
             }
@@ -139,8 +168,10 @@ namespace Sandbox.Game
         /// <returns>Returns starting damage for current stack</returns>
         private MyRaycastDamageInfo CastDDA(MySlimBlock cubeBlock)
         {
+            MySandboxGame.Log.WriteLine(" -   CastDDA - finding blocks between explosion center and " + cubeBlock.ToString());
             if (m_damageRemaining.ContainsKey(cubeBlock))
             {
+                MySandboxGame.Log.WriteLine(" -   Returning already stored DDA for block");
                 return m_damageRemaining[cubeBlock];
             }
 
@@ -178,6 +209,7 @@ namespace Sandbox.Game
                 {
                     if (m_damageRemaining.ContainsKey(cube))
                     {
+
                         return m_damageRemaining[cube];
                     }
                     else

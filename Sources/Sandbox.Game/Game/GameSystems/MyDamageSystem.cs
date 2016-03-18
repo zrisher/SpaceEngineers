@@ -62,6 +62,7 @@ namespace Sandbox.Game.GameSystems
         /// <param name="info">Information about the damage.  Can be modified</param>
         public void RaiseBeforeDamageApplied(object target, ref MyDamageInformation info)
         {
+            MySandboxGame.Log.WriteLine(" -zzz- RaiseBeforeDamageApplied - Amt " + info.Amount.ToString() + " Type " + info.Type.ToString() + " isDeformation? " + info.IsDeformation.ToString());
             foreach (var item in m_beforeDamageHandlers)
                 item.Item2(target, ref info);
         }
