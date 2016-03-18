@@ -7296,6 +7296,10 @@ namespace Sandbox.Game.Entities.Character
             get { return Integrity; }
         }
 
+        float IMyDestroyableObject.ProjectileResistance {
+            get { return 1; }
+        }
+
         public bool PrimaryLookaround
         {
             get { return false; }

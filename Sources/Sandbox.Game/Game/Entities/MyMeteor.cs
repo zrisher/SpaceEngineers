@@ -133,6 +133,10 @@ namespace Sandbox.Game.Entities
             get { return GameLogic.Integrity; }
         }
 
+        float IMyDestroyableObject.ProjectileResistance {
+            get { return 1; }
+        }
+
         private bool m_hasModifiableDamage;
         public bool UseDamageSystem
         {

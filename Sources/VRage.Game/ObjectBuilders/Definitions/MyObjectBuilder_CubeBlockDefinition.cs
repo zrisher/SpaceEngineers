@@ -398,6 +398,9 @@ namespace VRage.Game
         [ProtoMember, DefaultValue(1.0f)]
         public float DeformationRatio = 1.0f;
 
+        [ProtoMember, DefaultValue(1.0f)]
+        public float ProjectileResistance = 1.0f;
+
         [ProtoMember]
         public string EdgeType;
 

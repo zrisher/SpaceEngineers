@@ -353,6 +353,10 @@ namespace Sandbox.Game.Weapons
             get { return Integrity; }
         }
 
+        float IMyDestroyableObject.ProjectileResistance {
+            get { return 1; }
+        }
+
         bool IMyDestroyableObject.UseDamageSystem
         {
             get { return UseDamageSystem; }

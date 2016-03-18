@@ -44,6 +44,9 @@ namespace VRage.Game
             [ProtoMember]
             public float ProjectileHealthDamage;
 
+            [ProtoMember, DefaultValue(1f)]
+            public float ProjectilePenetration = 1f;
+
             [ProtoMember]
             public bool HeadShot;
 

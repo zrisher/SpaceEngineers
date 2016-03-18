@@ -704,6 +704,10 @@ namespace Sandbox.Game.Entities
             get { return m_hitPoints; }
         }
 
+        float IMyDestroyableObject.ProjectileResistance {
+            get { return 1; }
+        }
+
         public bool UseDamageSystem { get; private set; }
 
         public void DebugCheckValidShapes()

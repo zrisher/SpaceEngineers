@@ -207,6 +207,7 @@ namespace Sandbox.Definitions
         public MyStringId? DisplayNameVariant;
         public string BlockPairName;
         public float DeformationRatio;
+        public float ProjectileResistance;
         public float IntegrityPointsPerSec;
 
         public string EdgeType;
@@ -352,6 +353,7 @@ namespace Sandbox.Definitions
             this.m_symmetryY           = ob.MirroringY;
             this.m_symmetryZ           = ob.MirroringZ;
             this.DeformationRatio      = ob.DeformationRatio;
+            this.ProjectileResistance  = ob.ProjectileResistance;
             this.EdgeType              = ob.EdgeType;
             this.AutorotateMode        = ob.AutorotateMode;
             this.m_mirroringBlock      = ob.MirroringBlock;

@@ -142,6 +142,7 @@ namespace Sandbox.Definitions
         public MyCustomHitParticlesMethod ProjectileOnHitParticles;
         public float ProjectileMassDamage;
         public float ProjectileHealthDamage;
+        public float ProjectilePenetration;
         public bool HeadShot;
         public float ProjectileHeadShotDamage;
         public MyProjectileType ProjectileType;
@@ -161,6 +162,7 @@ namespace Sandbox.Definitions
             this.ProjectileHealthDamage = projectileProperties.ProjectileHealthDamage;
             this.ProjectileHitImpulse = projectileProperties.ProjectileHitImpulse;
             this.ProjectileMassDamage = projectileProperties.ProjectileMassDamage;
+            this.ProjectilePenetration = projectileProperties.ProjectilePenetration;
             this.ProjectileOnHitMaterialParticles = MyParticleEffects.GetCustomHitMaterialMethodById((int)projectileProperties.ProjectileOnHitMaterialParticlesType);
             this.ProjectileOnHitParticles = MyParticleEffects.GetCustomHitParticlesMethodById((int)projectileProperties.ProjectileOnHitParticlesType);
             this.ProjectileTrailColor = projectileProperties.ProjectileTrailColor;

@@ -178,6 +178,10 @@ namespace Sandbox.Game.Entities.Cube
             }
         }
 
+        float IMyDestroyableObject.ProjectileResistance {
+            get { return BlockDefinition.ProjectileResistance; }
+        }
+
         public float MaxIntegrity
         {
             get

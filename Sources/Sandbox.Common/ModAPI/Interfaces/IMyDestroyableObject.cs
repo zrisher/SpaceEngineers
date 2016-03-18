@@ -14,6 +14,10 @@ namespace Sandbox.ModAPI.Interfaces
         void OnDestroy();
         bool DoDamage(float damage, MyStringHash damageType, bool sync, MyHitInfo? hitInfo = null, long attackerId = 0);// returns true if damage could be applied
         float Integrity { get; }
+
+        // The overall ability of the object to reflect point forces applied to it
+        float ProjectileResistance { get; }
+
         /// <summary>
         /// When set to true, it should use MyDamageSystem damage routing.
         /// </summary>
