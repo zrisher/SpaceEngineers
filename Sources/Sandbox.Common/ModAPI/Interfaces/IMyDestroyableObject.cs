@@ -15,7 +15,16 @@ namespace Sandbox.ModAPI.Interfaces
         bool DoDamage(float damage, MyStringHash damageType, bool sync, MyHitInfo? hitInfo = null, long attackerId = 0);// returns true if damage could be applied
         float Integrity { get; }
 
-        // The overall ability of the object to reflect point forces applied to it
+        /// <summary>
+        /// The amount of point damage the surface of this object can reflect
+        /// </summary>
+        /// <remarks>
+        /// We could derive this from integrity, but it would need to be adjusted for object size.
+        /// Getting actual volume or surface area of a model doesn't currently exist, and even if approximated with 3I,
+        /// the integrity values for the same cubeblock across small/large grids aren't constant.
+        /// I.E. a large armor block has less than 125 x the integrity of a small one (similar to the volume problem that was fixed)
+        /// Setting it directly for each object gives us more balance control anyway.
+        /// </remarks>
         float ProjectileResistance { get; }
 
         /// <summary>

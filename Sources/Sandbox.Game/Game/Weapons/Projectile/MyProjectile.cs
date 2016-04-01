@@ -59,16 +59,17 @@ namespace Sandbox.Game.Weapons
         internal struct HitInfo
         {
             public IMyEntity Entity;
+            public IMyDestroyableObject Destroyable;
             public Vector3D Position;
             public Vector3 Normal;
             public bool Headshot;
+            public double DistanceSq;
         }
 
         const bool DEBUG_DRAW_PROJECTILES = false;
         const int CHECK_INTERSECTION_INTERVAL = 5; //projectile will check for intersection each n-th frame with n*longer line
         const int DEBUG_DRAW_EXTRA_FRAMES = 60 * 20; // How long to keep debug trails around
         const int DEFLECTED_MAX_FRAMES = 75; // How long to wait before killing deflected projectiles
-        const float DEFAULT_SURFACE_ELASTICITY = .10f; // How far a block's surface will stretch before giving way
         const float DEFAULT_TRAIL_LENGTH = 40; // Multiplied by ammo definition's trail factor
         const float DEFLECTED_SPEED_FACTOR = 0.5f; // Lose about 70% of energy, sqrt(.5) ~= .7
 
@@ -87,20 +88,21 @@ namespace Sandbox.Game.Weapons
         MyEntity m_weapon;
 
         bool m_drawTrail;
+        bool m_started;
+        bool m_closed;
         int m_debugDrawExtraFrames;
         int m_framesSinceDeflected;
-        int m_mass;
+        float m_kineticDamage;
         double m_distanceTraveled;
         double m_knownForwardClearance;
         HitInfo? m_nextHit;
         List<HitInfo> m_hits;
+        List<IMyDestroyableObject> m_PenetratedObjects;
 
         //  Type of this projectile
         MyProjectileAmmoDefinition m_projectileAmmoDefinition;
-
         public MyEntity OwnerEntity = null;//rifle, block, ...
         public MyEntity OwnerEntityAbsolute = null;//character, main ship cockpit, ...
-
         private VRage.Game.Models.MyIntersectionResultLineTriangleEx? m_intersection = null;
         private List<MyLineSegmentOverlapResult<MyEntity>> m_entityRaycastResult = null;
 
@@ -124,11 +126,9 @@ namespace Sandbox.Game.Weapons
             m_origin = origin + 0.1 * (Vector3D)directionNormalized;
             m_position = m_origin;
             m_weapon = weapon;
-
-            if (ammoDefinition.ProjectileTrailProbability >= MyUtils.GetRandomFloat(0, 1))
-                m_drawTrail = true;
-            else
-                m_drawTrail = false;
+            m_distanceTraveled = m_knownForwardClearance = 0;
+            m_framesSinceDeflected = m_debugDrawExtraFrames = 0;
+            m_drawTrail = ammoDefinition.ProjectileTrailProbability >= MyUtils.GetRandomFloat(0, 1);
 
                         /*
             if (MyConstants.EnableAimCorrection)
@@ -142,31 +142,25 @@ namespace Sandbox.Game.Weapons
                 }
             }             */
 
+            if (!m_started) {
+                m_nextHit = null;
+                m_hits = new List<HitInfo>(8);
+                m_PenetratedObjects = new List<IMyDestroyableObject>(8);
+                m_entityRaycastResult = new List<MyLineSegmentOverlapResult<MyEntity>>(16);
+            }
+            else if (!m_closed) {
+                Debug.Assert(false, "Projectile was restarted without being properly closed.");
+                Close();
+            }
+
             m_directionNormalized = directionNormalized;
             m_speed = ammoDefinition.DesiredSpeed * (ammoDefinition.SpeedVar > 0.0f ? MyUtils.GetRandomFloat(1 - ammoDefinition.SpeedVar, 1 + ammoDefinition.SpeedVar) : 1.0f);
             m_velocity = initialVelocity + m_directionNormalized * m_speed; ;
             m_maxTrajectory = ammoDefinition.MaxTrajectory * MyUtils.GetRandomFloat(0.8f, 1.2f); // +/- 20%
-            m_mass = (int)(2 * m_projectileAmmoDefinition.ProjectileMassDamage / (ammoDefinition.DesiredSpeed * ammoDefinition.DesiredSpeed));
-
-            m_distanceTraveled = m_knownForwardClearance = 0;
-            m_framesSinceDeflected = m_debugDrawExtraFrames = 0;
-            m_nextHit = null;
-            if (m_hits == null)
-                m_hits = new List<HitInfo>();
-            else
-                m_hits.Clear();
+            m_kineticDamage = 2 * m_projectileAmmoDefinition.ProjectileMassDamage / (ammoDefinition.DesiredSpeed * ammoDefinition.DesiredSpeed);
 
             // prefetch planet voxels in our path
             LineD line = new LineD(m_origin, m_origin + m_directionNormalized * m_maxTrajectory);
-
-            if (m_entityRaycastResult == null)
-            {
-                m_entityRaycastResult = new List<MyLineSegmentOverlapResult<MyEntity>>(16);
-            }
-            else
-            {
-                m_entityRaycastResult.Clear();
-            }
             MyGamePruningStructure.GetAllEntitiesInRay(ref line, m_entityRaycastResult, MyEntityQueryType.Static);
 
             foreach (var entity in m_entityRaycastResult)
@@ -178,6 +172,7 @@ namespace Sandbox.Game.Weapons
                 }
             }
 
+            m_started = true;
             VRageRender.MyRenderProxy.GetRenderProfiler().EndProfilingBlock();
         }
         
@@ -219,18 +214,6 @@ namespace Sandbox.Game.Weapons
             return true;
         }
 
-        #region Entity Helpers
-
-        /// <summary>
-        /// Get hit details for the first non-ignored entity in the projectile's path
-        /// </summary>
-        /// <remarks>
-        /// We do two types of tests - 1) a physics raycast and 2) an entities line overlap test.
-        /// 1 is cheaper because it uses a pruning structure, but apparently it misses characters and hitboxes are all prisms.
-        /// 2 takes longer but provides model-level collision, so hit points are much more accurate on things that aren't perfect rectangular prisms.
-        /// Unfortunately, 2 also tends to provide the wrong hit normals for under-construction blocks and misses (more) of closed airtight doors.
-        /// So we use 1 unless we find a character in the path with 2.
-        /// </remarks>
         private void GetHitEntityAndPosition(LineD line, out IMyEntity entity, out Vector3D hitPosition, out Vector3 hitNormal, out bool hitHead)
         {
             entity = null;
@@ -265,12 +248,6 @@ namespace Sandbox.Game.Weapons
                     entity = hitInfo.Value.HkHitInfo.GetHitEntity() as MyEntity;
                     hitPosition = hitInfo.Value.Position;
                     hitNormal = hitInfo.Value.HkHitInfo.Normal;
-
-                    if (IsIgnoredEntity(entity, hitNormal))
-                    {
-                        entity = null;
-                        hitPosition = hitNormal = Vector3.Zero;
-                    }
                 }
             }
 
@@ -299,7 +276,7 @@ namespace Sandbox.Game.Weapons
                         VRage.Game.Models.MyIntersectionResultLineTriangleEx? t;
                         hitCharacter.GetIntersectionWithLine(ref line, out t, out hitHead);
 
-                        if (t != null && !IsIgnoredEntity(entity, t.Value.NormalInWorldSpace))
+                        if (t != null)
                         {
                             double distanceSq = Vector3D.DistanceSquared(t.Value.IntersectionPointInWorldSpace, line.From);
                             if (distanceSq < bestDistanceSq)
@@ -329,7 +306,7 @@ namespace Sandbox.Game.Weapons
                 MyCharacter hitCharacter = entity as MyCharacter;
                 VRage.Game.Models.MyIntersectionResultLineTriangleEx? t;
                 hitCharacter.GetIntersectionWithLine(ref line, out t, out hitHead);
-                if (t == null || IsIgnoredEntity(entity, t.Value.NormalInWorldSpace))
+                if (t == null)
                 {
                     entity = null; // no hit.
                 }
@@ -351,11 +328,8 @@ namespace Sandbox.Game.Weapons
             if (destroyable == null) return;
 
             //damage tracking
-            MyEntity ent = (MyEntity)MySession.Static.ControlledEntity;
             if (this.OwnerEntityAbsolute != null && this.OwnerEntityAbsolute.Equals(MySession.Static.ControlledEntity))
-            {
                 MySession.Static.TotalDamageDealt += (uint)damage;
-            }
 
             if (!Sync.IsServer)
                 return;
@@ -381,7 +355,6 @@ namespace Sandbox.Game.Weapons
             if (gridToDeform != null)
                 ApplyDeformationCubeGrid(hitPosition, gridToDeform, damage);
 
-
             //Handle damage ?? some WIP code by Ondrej
             //MyEntity damagedObject = entity;
             //damagedObject.DoDamage(m_ammoProperties.HealthDamage, m_ammoProperties.ShipDamage, m_ammoProperties.EMPDamage, m_ammoProperties.DamageType, m_ammoProperties.AmmoType, m_ignorePhysObject);
@@ -390,26 +363,30 @@ namespace Sandbox.Game.Weapons
 
         }
 
+        #region Entity Helpers
+
         /// <summary>
         /// Tells us if an entity is to be ignored for collision checking.
         /// </summary>
         /// <remarks>
         /// We ignore everything without physics, the gun that shot the projectile,
-        /// and entities with a positive hit normal (i.e. we're hitting it from "inside" the entity)
+        /// entities with a positive hit normal (i.e. we're hitting it from "inside" the entity),
+        /// and anything we've previously penetrated (see the note in TryPenetrate)
         /// </summary>
-        private bool IsIgnoredEntity(IMyEntity entity, Vector3 hitNormal)
+        private bool IsIgnoredEntity(IMyEntity entity, Vector3 hitNormal, IMyDestroyableObject destroyable)
         {
             return entity == null || entity.Physics == null || entity == m_ignoreEntity ||
                 ((m_ignoreEntity is IMyGunBaseUser) &&
                     (m_ignoreEntity as IMyGunBaseUser).Owner is MyCharacter &&
                     (m_ignoreEntity as IMyGunBaseUser).Owner == entity) ||
-                (Vector3D.Dot(hitNormal, m_directionNormalized) > 0);
+                (Vector3D.Dot(hitNormal, m_directionNormalized) > 0) ||
+                m_PenetratedObjects.Contains(destroyable);
         }
 
         /// <summary>
         /// Find the destroyable object at hitPosition on damagedEntity
         /// </summary>
-        private IMyDestroyableObject GetDestroyableObject(Vector3D hitPosition, IMyEntity damagedEntity)
+        private IMyDestroyableObject GetDestroyableObject(IMyEntity damagedEntity, Vector3D hitPosition)
         {
             // If it's already destroyable, we're set!
             if (damagedEntity is IMyDestroyableObject)
@@ -435,7 +412,7 @@ namespace Sandbox.Game.Weapons
             //By Gregory: When MyEntitySubpart (e.g. extended parts of pistons and doors) damage the whole parent component
             //Temporary fix! Maybe other solution? MyEntitySubpart cannot implement IMyDestroyableObject cause is on dependent namespace
             if (damagedEntity is MyEntitySubpart && damagedEntity.Parent != null && damagedEntity.Parent.Parent is MyCubeGrid)
-                return GetDestroyableObject(damagedEntity.Parent.WorldAABB.Center, damagedEntity.Parent.Parent);
+                return GetDestroyableObject(damagedEntity.Parent.Parent, damagedEntity.Parent.WorldAABB.Center);
 
             return null;
         }
@@ -459,6 +436,99 @@ namespace Sandbox.Game.Weapons
                 return result;
         }
 
+        /// <summary>
+        /// Get hit details for the first non-ignored entity in the projectile's path
+        /// </summary>
+        /// <remarks>
+        /// We do two types of tests - 1) a physics raycast and 2) an entities line overlap test.
+        /// 1 is cheaper because it uses a pruning structure, but apparently it misses characters and hitboxes are all prisms.
+        /// 2 takes longer but provides model-level collision, so hit points are much more accurate on things that aren't perfect rectangular prisms.
+        /// Unfortunately, 2 also tends to provide the wrong hit normals for under-construction blocks and misses (more) of closed airtight doors.
+        /// </remarks>
+        private void GetHit(LineD line, out HitInfo? bestHit) {
+            // Current hit
+            MyEntity hitEntity;
+            IMyDestroyableObject hitDestroyable;
+            Vector3D hitPosition;
+            Vector3 hitNormal;
+            bool hitHead;
+            double hitDistanceSq;
+            VRage.Game.Models.MyIntersectionResultLineTriangleEx? hitTriangle;
+
+            // Best hit
+            bestHit = null;
+
+            // Find closest non-character hit with the method that's most accurate for them
+            ProfilerShort.Begin("MyGamePruningStructure::CastProjectileRay");
+            MyPhysics.HitInfo? hitInfo = MyPhysics.CastRay(line.From, line.To, MyPhysics.CollisionLayers.DefaultCollisionLayer);
+            ProfilerShort.End();
+
+            if (hitInfo.HasValue)
+            {
+                hitEntity = hitInfo.Value.HkHitInfo.GetHitEntity() as MyEntity;
+
+                if (!(hitEntity is MyCharacter))
+                {
+                    hitPosition = hitInfo.Value.Position;
+                    hitNormal = hitInfo.Value.HkHitInfo.Normal;
+                    hitDestroyable = GetDestroyableObject(hitEntity, hitPosition);
+                    hitDistanceSq = Vector3D.DistanceSquared(line.From, hitPosition);
+
+                    if (!IsIgnoredEntity(hitEntity, hitNormal, hitDestroyable))
+                    {
+                        bestHit = new HitInfo()
+                        {
+                            Entity = hitEntity,
+                            Destroyable = hitDestroyable,
+                            Position = hitPosition,
+                            Normal = hitNormal,
+                            Headshot = false,
+                            DistanceSq = hitDistanceSq
+                        };
+                    }
+                }
+            }
+
+            // Find closest character hit with the method that's most accurate for them
+            // If we don't already have a non-character hit (i.e. the one provided by the earlier raycast was ignored), look for those too.
+            m_entityRaycastResult.Clear();
+            MyGamePruningStructure.GetAllEntitiesInRay(ref line, m_entityRaycastResult);
+
+            foreach (var result in m_entityRaycastResult)
+            {
+                hitEntity = result.Element;
+                hitTriangle = null;
+                hitHead = false;
+
+                if (hitEntity is MyCharacter)
+                    (hitEntity as MyCharacter).GetIntersectionWithLine(ref line, out hitTriangle, out hitHead);
+                else if (!bestHit.HasValue)
+                    hitEntity.GetIntersectionWithLine(ref line, out hitTriangle);
+
+                if (hitTriangle.HasValue)
+                {
+                    hitPosition = hitTriangle.Value.IntersectionPointInWorldSpace;
+                    hitNormal = hitTriangle.Value.NormalInWorldSpace;
+                    hitDestroyable = GetDestroyableObject(hitEntity, hitPosition);
+                    hitDistanceSq = Vector3D.DistanceSquared(line.From, hitPosition);
+
+                    if ((!bestHit.HasValue || hitDistanceSq < bestHit.Value.DistanceSq) &&
+                        !IsIgnoredEntity(hitEntity, hitNormal, hitDestroyable))
+                    {
+                        bestHit = new HitInfo()
+                        {
+                            Entity = hitEntity,
+                            Destroyable = hitDestroyable,
+                            Position = hitPosition,
+                            Normal = hitNormal,
+                            Headshot = hitHead,
+                            DistanceSq = hitDistanceSq
+                        };
+                    }
+                }
+            }
+        }
+
         #endregion
         #region Ballistic Trajectory Simulation
 
@@ -473,24 +543,12 @@ namespace Sandbox.Game.Weapons
         {
             Vector3 end = m_position + CHECK_INTERSECTION_INTERVAL * (m_velocity * VRage.Game.MyEngineConstants.UPDATE_STEP_SIZE_IN_SECONDS);
             LineD line = new LineD(m_position, end);
+            GetHit(line, out m_nextHit);
 
-            IMyEntity hitEntity;
-            Vector3D hitPosition;
-            Vector3 hitNormal;
-            bool hitHeadshot;
-
-            GetHitEntityAndPosition(line, out hitEntity, out hitPosition, out hitNormal, out hitHeadshot);
-
-            if (hitEntity != null)
-            {
-                m_nextHit = new HitInfo() { Entity = hitEntity, Position = hitPosition, Normal = hitNormal, Headshot = hitHeadshot };
-                m_knownForwardClearance = (hitPosition - m_position).Length();
-            }
+            if (m_nextHit.HasValue)
+                m_knownForwardClearance = (m_nextHit.Value.Position - m_position).Length();
             else
-            {
-                m_nextHit = null;
                 m_knownForwardClearance = line.Length;
-            }
         }
 
         /// <summary>
@@ -532,7 +590,11 @@ namespace Sandbox.Game.Weapons
                 return;
             }
             m_velocity = DoBallisticInteraction(m_nextHit.Value);
-            Debug.Assert(m_velocity.Length() <= m_speed, "Projectile speed should not be increased by ballistic interation.");
+
+            // And deal with what's in our way - do the hit and update velocity
+            if (!(m_velocity.Length() <= m_speed)) {
+                Debug.Assert(false, "Projectile speed should not be increased by ballistic interation.");
+            }
 
             m_directionNormalized = Vector3D.Normalize(m_velocity);
             m_speed = (float)m_velocity.Length();
@@ -545,6 +607,7 @@ namespace Sandbox.Game.Weapons
         /// </summary>
         private Vector3D DoBallisticInteraction(HitInfo hit)
         {
+
             if (hit.Entity == null)
             {
                 Debug.Assert(false, "Projectile ballistic interaction should receive non-null hit entity.");
@@ -593,19 +656,16 @@ namespace Sandbox.Game.Weapons
             float impulse;
             Vector3D newVelocity;
 
-            // Note that checking for the destroyable here gets us the most up-to-date target if hitting a cubegrid
-            IMyDestroyableObject destroyable = GetDestroyableObject(hit.Position, hit.Entity);
-
-            if (destroyable != null)
+            if (hit.Destroyable != null)
             {
-                TryPenetrate(hit.Normal, destroyable, m_velocity, m_mass, out damage, out impulse, out newVelocity);
+                TryPenetrate(hit.Normal, hit.Destroyable, m_velocity, m_kineticDamage, out damage, out impulse, out newVelocity);
 
                 if (damage > 0)
                 {
-                    if (hit.Headshot)
+                    if (hit.Headshot && m_projectileAmmoDefinition.HeadShot)
                         damage *= m_projectileAmmoDefinition.ProjectileHeadShotDamage / m_projectileAmmoDefinition.ProjectileMassDamage;
 
-                    DoDamage(damage, hit.Position, destroyable);
+                    DoDamage(damage, hit.Position, hit.Destroyable);
                 }
 
                 if (impulse > 0 && (m_weapon == null || m_weapon.GetTopMostParent() != hit.Entity.GetTopMostParent()))
@@ -638,7 +698,6 @@ namespace Sandbox.Game.Weapons
         private void TryPenetrate(Vector3 hitNormal, IMyDestroyableObject hitEntity, Vector3D initialVelocity, float mass,
             out float damage, out float impulse, out Vector3D newVelocity)
         {
-
             damage = 0;
             impulse = 0;
 
@@ -660,10 +719,10 @@ namespace Sandbox.Game.Weapons
             float energyAgainstSurfaceNormal = initialEnergy * -1 * (float)normalRatio;
 
             // find the energy applied to projectile by entity along surface normal
-            float entityIntegrity = hitEntity.Integrity;
-            if (hitEntity is MySlimBlock)
-                entityIntegrity /= ((MySlimBlock)hitEntity).DamageRatio * ((MySlimBlock)hitEntity).DeformationRatio;
-            float potentialDeflectionEnergy = entityIntegrity * DEFAULT_SURFACE_ELASTICITY * hitEntity.ProjectileResistance / m_projectileAmmoDefinition.ProjectilePenetration;
+            float potentialDeflectionEnergy = hitEntity.ProjectileResistance / m_projectileAmmoDefinition.ProjectilePenetration;
+            if (hitEntity is MySlimBlock && !((MySlimBlock)hitEntity).IsFullIntegrity)
+                potentialDeflectionEnergy *= ((MySlimBlock)hitEntity).Integrity / ((MySlimBlock)hitEntity).MaxIntegrity;
+
             float deflectionEnergy = Math.Min(energyAgainstSurfaceNormal, potentialDeflectionEnergy);
 
             // === Affect the projectile and object accordingly
@@ -681,6 +740,11 @@ namespace Sandbox.Game.Weapons
                 // remove the energy expended overcoming deflection
                 float energyRemaining = Math.Max(0, initialEnergy - deflectionEnergy);
 
+                // find the energy the object can absorb
+                float entityIntegrity = hitEntity.Integrity;
+                if (hitEntity is MySlimBlock)
+                    entityIntegrity /= ((MySlimBlock)hitEntity).DamageRatio * ((MySlimBlock)hitEntity).DeformationRatio;
+
                 // if object provides enough integrity to stop projectile
                 if (energyRemaining <= entityIntegrity)
                 {
@@ -694,6 +758,14 @@ namespace Sandbox.Game.Weapons
                     // remove the energy expended passing through the block
                     damage = entityIntegrity;
                     energyRemaining -= entityIntegrity;
+
+                    // Note: We track this object to ensure we don't hit it again later.
+                    // Normally it would be removed before next frame, 
+                    // but if we're on the Client we'd need to wait a few frames to hear that from Server, causing desync
+                    // or if a mod reduces the damage done via the damage system, we'd need to hit hit again.
+                    // It's unfortunate that don't take damage system into account when determining penetration,
+                    // but there's no way to do both that and keep the projectile in sync without adding significant network overhead.
+                    m_PenetratedObjects.Add(hitEntity);
 
                     // apply defraction, sin (1) / sin(2) = n2 / n1
                     double speedRatio = Math.Sqrt(energyRemaining / initialEnergy);
@@ -970,8 +1042,14 @@ namespace Sandbox.Game.Weapons
             OwnerEntity = null;
             m_ignoreEntity = null;
             m_weapon = null;
+            m_nextHit = null;
+            m_hits.Clear();
+            m_PenetratedObjects.Clear();
+            m_entityRaycastResult.Clear();
+            m_closed = true;
 
             //  Don't stop sound
+            //  Don't stop believing
         }
     }
 }

@@ -354,7 +354,7 @@ namespace Sandbox.Game.Weapons
         }
 
         float IMyDestroyableObject.ProjectileResistance {
-            get { return 1; }
+            get { return 0; }
         }
 
         bool IMyDestroyableObject.UseDamageSystem

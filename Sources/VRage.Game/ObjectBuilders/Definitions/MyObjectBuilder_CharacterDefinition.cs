@@ -224,6 +224,9 @@ namespace VRage.Game
         public float Mass = 100f;
 
         [ProtoMember]
+        public float ProjectileResistance;
+
+        [ProtoMember]
         public string ModelRootBoneName;
 
         [ProtoMember]

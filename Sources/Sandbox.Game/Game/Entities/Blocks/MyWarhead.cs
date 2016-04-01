@@ -533,7 +533,7 @@ namespace Sandbox.Game.Entities.Cube
         }
 
         float IMyDestroyableObject.ProjectileResistance {
-            get { return 1; }
+            get { return 0; }
         }
 
         bool IMyDestroyableObject.UseDamageSystem

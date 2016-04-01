@@ -705,7 +705,7 @@ namespace Sandbox.Game.Entities
         }
 
         float IMyDestroyableObject.ProjectileResistance {
-            get { return 1; }
+            get { return 0; }
         }
 
         public bool UseDamageSystem { get; private set; }

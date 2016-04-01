@@ -7297,7 +7297,7 @@ namespace Sandbox.Game.Entities.Character
         }
 
         float IMyDestroyableObject.ProjectileResistance {
-            get { return 1; }
+            get { return Definition.ProjectileResistance; }
         }
 
         public bool PrimaryLookaround

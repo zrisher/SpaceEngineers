@@ -102,6 +102,7 @@ namespace Sandbox.Definitions
         public string[] MaterialsDisabledIn1st;
 
         public float Mass;
+        public float ProjectileResistance;
         public float ImpulseLimit;
         public string RighHandItemBone;
 
@@ -218,6 +219,7 @@ namespace Sandbox.Definitions
             FastFlySoundName = builder.FastFlySoundName;
             LoopingFootsteps = builder.LoopingFootsteps;
             VisibleOnHud = builder.VisibleOnHud;
+            ProjectileResistance = builder.ProjectileResistance;
             UsableByPlayer = builder.UsableByPlayer;
             RagdollRootBody = builder.RagdollRootBody;
             InitialAnimation = builder.InitialAnimation;
