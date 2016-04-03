@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Diagnostics;
 using Sandbox.Common;
 using Sandbox.Engine.Physics;
 using Sandbox.Engine.Utils;
@@ -25,6 +24,8 @@ using System.Collections.Generic;
 using VRage.Game.Models;
 using VRage.Game.Entity;
 using VRage.Game;
+
+using System.Diagnostics;
 
 // zzz done:
 // * investigate code and figure out how to implement
@@ -105,7 +106,7 @@ namespace Sandbox.Game.Weapons
             public double DistanceSq;
         }
 
-        const bool DEBUG_DRAW_PROJECTILES = false;
+        const bool DEBUG_DRAW_PROJECTILES = true;
         const int CHECK_INTERSECTION_INTERVAL = 5; //projectile will check for intersection each n-th frame with n*longer line
         const int DEBUG_DRAW_EXTRA_FRAMES = 60 * 20; // How long to keep debug trails around
         const int DEFLECTED_MAX_FRAMES = 75; // How long to wait before killing deflected projectiles
@@ -199,6 +200,8 @@ namespace Sandbox.Game.Weapons
             m_velocity = initialVelocity + m_directionNormalized * m_speed; ;
             m_maxTrajectory = ammoDefinition.MaxTrajectory * MyUtils.GetRandomFloat(0.8f, 1.2f); // +/- 20%
             m_mass = 2 * m_projectileAmmoDefinition.ProjectileMassDamage * JOULES_PER_DAMAGE / (ammoDefinition.DesiredSpeed * ammoDefinition.DesiredSpeed);
+
+            MySandboxGame.Log.WriteLine("-Start-  m_mass: " + m_mass);
 
             // prefetch planet voxels in our path
             LineD line = new LineD(m_origin, m_origin + m_directionNormalized * m_maxTrajectory);
@@ -444,7 +447,10 @@ namespace Sandbox.Game.Weapons
                     var block = grid.GetCubeBlock(blockPos);
 
                     if (block != null)
+                    {
+                        //MySandboxGame.Log.WriteLine(" -GetDestroyableObject-  found and returning a destroyable slimblock " + block.ToString() + " - " + block.UniqueId.ToString() + " - at " + blockPos.ToString());
                         return block;
+                    }
                 }
 
                 return null;
@@ -582,12 +588,17 @@ namespace Sandbox.Game.Weapons
         /// </remarks>
         private void UpdateClearance()
         {
+            //MySandboxGame.Log.WriteLine(" -UpdateClearance- ");
             Vector3 end = m_position + CHECK_INTERSECTION_INTERVAL * (m_velocity * VRage.Game.MyEngineConstants.UPDATE_STEP_SIZE_IN_SECONDS);
             LineD line = new LineD(m_position, end);
+            //MySandboxGame.Log.WriteLine(" -Update-  Calculating hits out to    " + m_clearanceCheckEnd.ToString());
             GetHit(line, out m_nextHit);
 
             if (m_nextHit.HasValue)
+            {
                 m_knownForwardClearance = (m_nextHit.Value.Position - m_position).Length();
+                //MySandboxGame.Log.WriteLine(" -Update-  Found an entity " + hitEntity.ToString() + " in path at " + hitEntity.ToString() + " where (Vector3D.Dot(hitNormal, m_directionNormalized) > 0)? " + (Vector3D.Dot(hitNormal, m_directionNormalized) > 0).ToString());
+            }
             else
                 m_knownForwardClearance = line.Length;
         }
@@ -605,11 +616,14 @@ namespace Sandbox.Game.Weapons
 
             // If we're out of known clearance but we aren't about to hit something, update clearance
             if (m_knownForwardClearance < desiredTravelDistance && m_nextHit == null)
+            {
                 UpdateClearance();
+            }
 
             // If we have enough space ahead to move a full frame, do so and return
             if (m_knownForwardClearance >= desiredTravelDistance)
             {
+                //MySandboxGame.Log.WriteLine(" -UpdateTravel- Move forward full frame");
                 m_position += m_directionNormalized * desiredTravelDistance;
                 m_distanceTraveled += desiredTravelDistance;
                 m_knownForwardClearance -= desiredTravelDistance;
@@ -619,6 +633,7 @@ namespace Sandbox.Game.Weapons
             // Otherwise, move forward the space we can
             if (m_knownForwardClearance > 0)
             {
+                //MySandboxGame.Log.WriteLine(" -UpdateTravel- Move forward partial frame");
                 m_position += m_directionNormalized * m_knownForwardClearance;
                 m_distanceTraveled += m_knownForwardClearance;
                 m_knownForwardClearance = 0;
@@ -628,20 +643,37 @@ namespace Sandbox.Game.Weapons
             if (m_nextHit == null || m_nextHit.Value.Entity == null)
             {
                 Debug.Assert(false, "Projectile next hit should exist when updated clearance < desired distance.");
+                MySandboxGame.Log.WriteLine(" -Update-  ERROR: Next hit should exist when updated clearance < desired distance.  ");
                 return;
             }
+
+            //MySandboxGame.Log.WriteLine(" -Update-  Doing ballistic interation with " + m_nextHit.Value.entity + " at " + m_nextHit.Value.position.ToString());
+            //MySandboxGame.Log.WriteLine(" -Update-  Position:  " + m_position.ToString());
+            //MySandboxGame.Log.WriteLine(" -Update-  Direction: " + m_directionNormalized.ToString());
+            //MySandboxGame.Log.WriteLine(" -Update-  Speed:     " + m_speed.ToString());
+            //MySandboxGame.Log.WriteLine(" -Update-  Velocity:  " + m_velocity.ToString());
 
             m_velocity = DoBallisticInteraction(m_nextHit.Value);
 
             // And deal with what's in our way - do the hit and update velocity
-            if (m_velocity.Length() > m_speed) {
+            if (!(m_velocity.Length() <= m_speed)) {
                 Debug.Assert(false, "Projectile speed should not be increased by ballistic interation.");
+                MySandboxGame.Log.WriteLine(" -Update-  ERROR: SPEED INCREASED!  ");
+                MySandboxGame.Log.WriteLine(" -Update-  m_speed:  " + m_speed.ToString());
+                MySandboxGame.Log.WriteLine(" -Update-  m_velocity.Length():  " + m_velocity.Length().ToString());
             }
 
             m_directionNormalized = Vector3D.Normalize(m_velocity);
             m_speed = (float)m_velocity.Length();
+
             m_hits.Insert(0, m_nextHit.Value);
             m_nextHit = null;
+
+            //MySandboxGame.Log.WriteLine(" -Update-  Finished ballistic interation");
+            //MySandboxGame.Log.WriteLine(" -Update-  Final Position:  " + m_position.ToString());
+            //MySandboxGame.Log.WriteLine(" -Update-  Final Direction: " + m_directionNormalized.ToString());
+            //MySandboxGame.Log.WriteLine(" -Update-  Final Speed:     " + m_speed.ToString());
+            //MySandboxGame.Log.WriteLine(" -Update-  Final Velocity:  " + m_velocity.ToString());
         }
 
         /// <summary>
@@ -652,6 +684,7 @@ namespace Sandbox.Game.Weapons
             if (hit.Entity == null)
             {
                 Debug.Assert(false, "Projectile ballistic interaction should receive non-null hit entity.");
+                MySandboxGame.Log.WriteLine(" -DoBallisticInteraction-  ERROR: Hit.Entity was null");
                 return Vector3D.Zero;
             }
 
@@ -699,6 +732,7 @@ namespace Sandbox.Game.Weapons
 
             if (hit.Destroyable != null)
             {
+                //MySandboxGame.Log.WriteLine(" -Update-  Object is destroyable, trying to penetrate " + hit.Entity.EntityId.ToString());
                 TryPenetrate(hit.Normal, hit.Destroyable, m_velocity, m_mass, out damage, out impulse, out newVelocity);
 
                 if (damage > 0)
@@ -715,17 +749,22 @@ namespace Sandbox.Game.Weapons
             else
             {
                 // We've hit an indestructible object, stop here.
+                //MySandboxGame.Log.WriteLine(" -Update-  GetDestroyableObject returned null object, checking for types");
+
                 if (hit.Entity is MyVoxelMap)
                 {
                     // TODO: Damage voxels with projectiles
                     // We could remove a portion of the voxel according to its density, but it's expensive. 
                     // We could only do it given a certain weapon rate of fire and burst rate, though.
+                    //MySandboxGame.Log.WriteLine(" -Update-  Hit a voxel");
                 }
                 else
                 {
+                    MySandboxGame.Log.WriteLine(" -Update-  Hit an unknown destroyable object: " + hit.Entity.ToString());
                     Debug.Assert(false, "Projectile hit an unknown destroyable object: " + hit.Entity.ToString());
                 }
 
+                //MySandboxGame.Log.WriteLine(" -Update-  Stopping projectile due to collision with non-destroyable object.");
                 newVelocity = Vector3D.Zero;
             }
 
@@ -754,10 +793,18 @@ namespace Sandbox.Game.Weapons
             if (normalRatio > 0)
             {
                 Debug.Assert(false, "Projectile hit normal ratio should be <= 0.");
+                MySandboxGame.Log.WriteLine(" -TryPenetrate-  ERROR: Hit normal was positive.");
+                MySandboxGame.Log.WriteLine(" -TryPenetrate-  initialDirection: " + initialDirection.ToString());
+                MySandboxGame.Log.WriteLine(" -TryPenetrate-  m_directionNormalized:" + m_directionNormalized.ToString());
+                MySandboxGame.Log.WriteLine(" -TryPenetrate-  (Vector3D.Dot(hitNormal, m_directionNormalized) > 0)" + (Vector3D.Dot(hitNormal, m_directionNormalized) > 0).ToString());
                 normalRatio *= -1;
             }
+
             Vector3D velocityAgainstSurfaceNormal = initialSpeed * normalRatio * (Vector3D)hitNormal;
             float damageAgainstSurfaceNormal = initialDamage * -1 * (float)normalRatio;
+
+            MySandboxGame.Log.WriteLine(" -TryPenetrate-  speedAgainstSurfaceNormal: " + velocityAgainstSurfaceNormal.Length().ToString());
+            MySandboxGame.Log.WriteLine(" -TryPenetrate-  damageAgainstSurfaceNormal: " + damageAgainstSurfaceNormal.ToString());
 
             // find the energy applied to projectile by entity along surface normal
             float potentialDamageDeflected = hitEntity.ProjectileResistance / m_projectileAmmoDefinition.ProjectilePenetration;
@@ -765,6 +812,9 @@ namespace Sandbox.Game.Weapons
                 potentialDamageDeflected *= ((MySlimBlock)hitEntity).Integrity / ((MySlimBlock)hitEntity).MaxIntegrity;
 
             float damageDeflected = Math.Min(damageAgainstSurfaceNormal, potentialDamageDeflected);
+
+            MySandboxGame.Log.WriteLine(" -TryPenetrate-  potentialDamageDeflected: " + potentialDamageDeflected.ToString());
+            MySandboxGame.Log.WriteLine(" -TryPenetrate-  damageDeflected: " + damageDeflected.ToString());
 
             // === Affect the projectile and object accordingly
             newVelocity = initialVelocity;
@@ -776,20 +826,26 @@ namespace Sandbox.Game.Weapons
                 newVelocity += (2 - damageDeflected / potentialDamageDeflected) * -1 * velocityAgainstSurfaceNormal;
                 newVelocity *= DEFLECTED_SPEED_FACTOR;
                 m_state = MyProjectileStateEnum.DEFLECTED; // flag for removal
+                MySandboxGame.Log.WriteLine(" -TryPenetrate-  deflected velocity: " + newVelocity.ToString() + " length: " + newVelocity.Length().ToString());
             }
             else {
                 // remove the energy expended overcoming deflection
                 float damageRemaining = Math.Max(0, initialDamage - damageDeflected);
+                MySandboxGame.Log.WriteLine(" -TryPenetrate-  energyRemaining after deflection attempt: " + damageRemaining.ToString());
 
                 // find the damage the object can absorb
                 float entityIntegrity = hitEntity.Integrity;
                 if (hitEntity is MySlimBlock)
                     entityIntegrity /= ((MySlimBlock)hitEntity).DamageRatio * ((MySlimBlock)hitEntity).DeformationRatio;
 
+                MySandboxGame.Log.WriteLine(" -TryPenetrate-  entityIntegrity: " + entityIntegrity.ToString());
+
+
                 // if object provides enough integrity to stop projectile
                 if (damageRemaining <= entityIntegrity)
                 {
                     // stop it and convert remaining energy to damage
+                    MySandboxGame.Log.WriteLine(" -TryPenetrate-  block stopped projectile!");
                     newVelocity = Vector3D.Zero;
                     damage = damageRemaining;
                 }
@@ -797,6 +853,7 @@ namespace Sandbox.Game.Weapons
                 else
                 {
                     // remove the energy expended passing through the block
+                    MySandboxGame.Log.WriteLine(" -TryPenetrate-  projectile passed through block!");
                     damage = entityIntegrity;
                     damageRemaining -= entityIntegrity;
 
@@ -814,12 +871,24 @@ namespace Sandbox.Game.Weapons
                     Vector3D newDirection = initialDirection * speedRatio - (Vector3D)hitNormal * (1 - speedRatio);
                     newDirection = Vector3D.Normalize(newDirection); // since hitNormal has less precision the result is often just a little short
                     newVelocity = newDirection * initialSpeed * speedRatio;
+
+                    //MySandboxGame.Log.WriteLine(" -TryPenetrate-  speedRatio:" + speedRatio.ToString());
+                    //MySandboxGame.Log.WriteLine(" -TryPenetrate-  newDirection:" + newDirection.ToString());
+                    //MySandboxGame.Log.WriteLine(" -TryPenetrate-  newVelocity:" + newVelocity.ToString());
                 }
 
             }
 
             // calculate impulse provided to the hit object
             impulse = mass * (float)(initialVelocity - newVelocity).Length();
+
+
+            MySandboxGame.Log.WriteLine(" -TryPenetrate-  damage done: " + damage.ToString());
+            MySandboxGame.Log.WriteLine(" -TryPenetrate-  impulse to hit object: " + impulse.ToString());
+
+            //MySandboxGame.Log.WriteLine(" -TryPenetrate-  zeroing damage and impulse for testing");
+            //damage = 0;
+            //impulse = 0;
         }
 
         #endregion
