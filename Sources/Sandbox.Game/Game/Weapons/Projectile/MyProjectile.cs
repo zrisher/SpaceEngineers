@@ -112,7 +112,7 @@ namespace Sandbox.Game.Weapons
         const int JOULES_PER_DAMAGE = 15;
         const int MIN_SPEED = 15;
         const float DEFAULT_TRAIL_LENGTH = 40; // Multiplied by ammo definition's trail factor
-        const float DEFLECTED_SPEED_FACTOR = 0.5f; // Lose about 70% of energy, sqrt(.5) ~= .7
+        //const float DEFLECTED_SPEED_FACTOR = 0.5f; // Lose about 70% of energy, sqrt(.5) ~= .7
 
         //  IMPORTANT: This class isn't realy inicialized by constructor, but by Start()
         //  So don't initialize members here, do it in Start()
@@ -699,7 +699,7 @@ namespace Sandbox.Game.Weapons
 
             if (hit.Destroyable != null)
             {
-                TryPenetrate(hit.Normal, hit.Destroyable, m_velocity, m_mass, out damage, out impulse, out newVelocity);
+                TryPenetrate(ref hit, ref m_velocity, m_mass, out damage, out impulse, out newVelocity);
 
                 if (damage > 0)
                 {
@@ -736,28 +736,30 @@ namespace Sandbox.Game.Weapons
         /// Determines the interaction between a projectile and a hit entity
         /// Gives us the damage and impulse done to the object and the new velocity of the projectile
         /// </summary>
-        private void TryPenetrate(Vector3 hitNormal, IMyDestroyableObject hitEntity, Vector3D initialVelocity, float mass,
+        // ISSUE: impulse is not applied along hit normal but along some other direction, it would be best if it could be handled as a vector
+        private void TryPenetrate(ref HitInfo hitInfo, ref Vector3D initialVelocity, float mass,
             out float damage, out float impulse, out Vector3D newVelocity)
         {
-            damage = 0;
-            impulse = 0;
+            MyPhysicsComponentBase topMostPhysics = hitInfo.Entity.GetTopMostParent().Physics;
+            Vector3 hitNormal = hitInfo.Normal;
+            IMyDestroyableObject hitEntity = hitInfo.Destroyable;
 
-            Vector3D initialDirection = Vector3D.Normalize(initialVelocity);
-            float initialSpeed = (float)initialVelocity.Length();
-            float initialDamage = .5f * mass * initialSpeed * initialSpeed / JOULES_PER_DAMAGE;
+            Vector3 hitEntityInitialVelocity = topMostPhysics.LinearVelocity; // TODO: linear velocity at position
+            Vector3 relativeVelocity = initialVelocity - hitEntityInitialVelocity; 
 
             // === Calculate the counter-force applied to projectile by entity
 
             // find energy applied by projectile to entity against the surface normal
-            double normalRatio;
-            Vector3D.Dot(ref initialDirection, ref hitNormal, out normalRatio);
-            if (normalRatio > 0)
+            float normalSpeed;
+            Vector3.Dot(ref relativeVelocity, ref hitNormal, out normalSpeed);
+            if (normalSpeed > 0)
             {
-                Debug.Assert(false, "Projectile hit normal ratio should be <= 0.");
-                normalRatio *= -1;
+                // IntersectionWithLine sometimes gives the opposite of normal
+                Debug.Assert(false, "Projectile hit normal speed should be <= 0.");
+                normalSpeed *= -1;
             }
-            Vector3D velocityAgainstSurfaceNormal = initialSpeed * normalRatio * (Vector3D)hitNormal;
-            float damageAgainstSurfaceNormal = initialDamage * -1 * (float)normalRatio;
+            Vector3D velocityAgainstSurfaceNormal = normalSpeed * (Vector3D)hitNormal;
+            float damageAgainstSurfaceNormal = 0.5f * mass * (normalSpeed * normalSpeed) / JOULES_PER_DAMAGE;
 
             // find the energy applied to projectile by entity along surface normal
             float potentialDamageDeflected = hitEntity.ProjectileResistance / m_projectileAmmoDefinition.ProjectilePenetration;
@@ -767,19 +769,28 @@ namespace Sandbox.Game.Weapons
             float damageDeflected = Math.Min(damageAgainstSurfaceNormal, potentialDamageDeflected);
 
             // === Affect the projectile and object accordingly
-            newVelocity = initialVelocity;
+            //// There are a lot of ways we could derive reflection index and energy absorption; these are rough approximations
 
+            float invTotalMass = 1f / (mass + topMostPhysics.Mass);
+
+            float coeffRestitutionNormal, coeffRestitutionOrtho;
             // if object provides enough resistance, deflect the projectile
             if (damageAgainstSurfaceNormal <= damageDeflected)
             {
-                // There are a lot of ways we could derive reflection index and energy absorption; these are rough approximations
-                newVelocity += (2 - damageDeflected / potentialDamageDeflected) * -1 * velocityAgainstSurfaceNormal;
-                newVelocity *= DEFLECTED_SPEED_FACTOR;
+                // these are fudgable but coeffRestitutionOrtho >= coeffRestitutionNormal and obviously 0 << Cr << 1
+                coeffRestitutionNormal = 0.5f;
+                coeffRestitutionOrtho = 0.9f;
+
+                damage = 0f;
                 m_state = MyProjectileStateEnum.DEFLECTED; // flag for removal
             }
-            else {
+            else 
+            {
+                float totalDamage = 0.5f * mass * (float)relativeVelocity.LengthSquared() / JOULES_PER_DAMAGE;
+
                 // remove the energy expended overcoming deflection
-                float damageRemaining = Math.Max(0, initialDamage - damageDeflected);
+                float damageRemaining = totalDamage - damageDeflected;
+                Debug.Assert(damageRemaining > 0f, "Negative damage, hit by Care Bear Stare");
 
                 // find the damage the object can absorb
                 float entityIntegrity = hitEntity.Integrity;
@@ -790,15 +801,26 @@ namespace Sandbox.Game.Weapons
                 if (damageRemaining <= entityIntegrity)
                 {
                     // stop it and convert remaining energy to damage
-                    newVelocity = Vector3D.Zero;
+
+                    // Cr is zero
+                    Vector3 relativeMomentum = relativeVelocity * mass;
+
+                    // calculate projectile velocity
+                    Vector3 finalRelativeVelocity = relativeMomentum * invTotalMass;
+                    newVelocity = finalRelativeVelocity + hitEntityInitialVelocity;
+
+                    // hit object velocity == projectile velocity
+
                     damage = damageRemaining;
+                    impulse = finalRelativeVelocity.Length() * topMostPhysics.Mass;
+
+                    return;
                 }
                 // otherwise, we're penetrating
                 else
                 {
                     // remove the energy expended passing through the block
                     damage = entityIntegrity;
-                    damageRemaining -= entityIntegrity;
 
                     // Note: We track this object to ensure we don't hit it again later.
                     // Normally it would be removed before next frame, 
@@ -808,18 +830,28 @@ namespace Sandbox.Game.Weapons
                     // but there's no way to do both that and keep the projectile in sync without adding significant network overhead.
                     m_PenetratedObjects.Add(hitEntity);
 
-                    // apply defraction, sin (1) / sin(2) = n2 / n1
-                    double speedRatio = Math.Sqrt(damageRemaining / initialDamage);
-                    Debug.Assert(0 <= speedRatio && speedRatio <= 1, "Projectile speedRatio of " + speedRatio.ToString() + " should be between 0 and 1.");
-                    Vector3D newDirection = initialDirection * speedRatio - (Vector3D)hitNormal * (1 - speedRatio);
-                    newDirection = Vector3D.Normalize(newDirection); // since hitNormal has less precision the result is often just a little short
-                    newVelocity = newDirection * initialSpeed * speedRatio;
+                    // again, fudgable. -1 <= coeffRestitutionOrtho < coeffRestitutionNormal. Since we are going through the target, -1 << Cr << 0
+                    float damageRatio = damage / totalDamage;
+                    coeffRestitutionNormal = damageRatio - 1f;
+                    coeffRestitutionOrtho = -1 - damageRatio / 2f;
                 }
 
             }
 
-            // calculate impulse provided to the hit object
-            impulse = mass * (float)(initialVelocity - newVelocity).Length();
+            float relativeMomentumNormal = normalSpeed * mass;
+            Vector3 relativeMomentumOrtho = (relativeVelocity - hitNormal * normalSpeed) * mass;
+
+            // calculate projectile velocity
+            Vector3 finalRelativeNormalVelocity = hitNormal * (relativeMomentumNormal - topMostPhysics.Mass * coeffRestitutionNormal * relativeMomentumNormal) * invTotalMass;
+            Vector3 finalRelativeOrthVelocity = (relativeMomentumOrtho - topMostPhysics.Mass * coeffRestitutionOrtho * relativeMomentumOrtho) * invTotalMass;
+            newVelocity = finalRelativeNormalVelocity + finalRelativeOrthVelocity + hitEntityInitialVelocity;
+
+            // calculate hit object velocity
+            finalRelativeNormalVelocity = hitNormal * (relativeMomentumNormal + mass * coeffRestitutionNormal * relativeMomentumNormal) * invTotalMass;
+            finalRelativeOrthVelocity = (relativeMomentumOrtho + mass * coeffRestitutionOrtho * relativeMomentumOrtho) * invTotalMass;
+            Vector3 hitObjectVelocityChange = finalRelativeNormalVelocity + finalRelativeOrthVelocity;
+
+            impulse = hitObjectVelocityChange.Length() * topMostPhysics.Mass;
         }
 
         #endregion
